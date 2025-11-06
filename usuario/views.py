@@ -23,23 +23,31 @@ class RegisterView(generics.CreateAPIView):
     @transaction.atomic
     def create(self, request, *args, **kwargs):
         try:
-            serializer = self.get_serializer(data=request.data)
-            serializer.is_valid(raise_exception=True)
+            # Hacer mutable el request.data
+            mutable_data = request.data.copy()
             
-            # Verificar si el grupo existe si se proporciona
-            grupo_id = request.data.get('grupo')
-            if grupo_id:
-                try:
-                    grupo = Grupo.objects.get(id=grupo_id, is_active=True)
-                except Grupo.DoesNotExist:
-                    return Response({
-                        "status": 2,
-                        "error": 1,
-                        "message": "El grupo especificado no existe o no está activo"
-                    }, status=status.HTTP_400_BAD_REQUEST)
+            print("📥 Datos recibidos:", mutable_data)  # ← AÑADE ESTO PARA DEBUG
+            
+            # Asignar grupo 2 por defecto
+            if 'grupo' not in mutable_data:
+                mutable_data['grupo'] = 2
+            
+            serializer = self.get_serializer(data=mutable_data)
+            
+            if not serializer.is_valid():
+                print("❌ Errores del serializer:", serializer.errors)  # ← AÑADE ESTO
+                return Response({
+                    "status": 2,
+                    "error": 1,
+                    "message": "Errores de validación",
+                    "errors": serializer.errors  # ← INCLUYE LOS ERRORES DETALLADOS
+                }, status=status.HTTP_400_BAD_REQUEST)
             
             user = serializer.save()
             
+            # Generar tokens JWT para el nuevo usuario
+            from rest_framework_simplejwt.tokens import RefreshToken
+            refresh = RefreshToken.for_user(user)
             
             return Response({
                 "status": 1,
@@ -51,19 +59,24 @@ class RegisterView(generics.CreateAPIView):
                     "first_name": user.first_name,
                     "last_name": user.last_name,
                     "email": user.email,
-                    "grupo": user.grupo.nombre if user.grupo else None,
+                    "grupo_id": user.grupo.id if user.grupo else None,
+                    "grupo_nombre": user.grupo.nombre if user.grupo else None,
                     "ci": user.ci,
-                    "telefono": user.telefono
+                    "telefono": user.telefono,
+                    "is_staff": user.is_staff,
+                    "is_active": user.is_active,
+                    "access": str(refresh.access_token),
+                    "refresh": str(refresh)
                 }
             }, status=status.HTTP_201_CREATED)
             
         except Exception as e:
+            print("💥 Error general:", str(e))  # ← AÑADE ESTO
             return Response({
                 "status": 2,
                 "error": 1,
                 "message": f"Error en el registro: {str(e)}"
             }, status=status.HTTP_400_BAD_REQUEST)
-
 # --------------------------
 # Login personalizado (usa username y password)
 # --------------------------
@@ -112,9 +125,12 @@ class MyTokenObtainPairView(TokenObtainPairView):
                 "first_name": user.first_name,
                 "last_name": user.last_name,
                 "email": user.email,
-                "grupo": user.grupo.nombre if user.grupo else None,
+                "grupo_id": user.grupo.id if user.grupo else None,  
+                "grupo_nombre": user.grupo.nombre if user.grupo else None,  
                 "ci": user.ci,
-                "telefono": user.telefono
+                "telefono": user.telefono,
+                "is_staff": user.is_staff,  
+                "is_active": user.is_active  
             }
             
             response_data = serializer.validated_data

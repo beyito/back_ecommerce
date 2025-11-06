@@ -102,7 +102,8 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
         token['last_name'] = user.last_name
         token['email'] = user.email
         token['is_staff'] = user.is_staff
-        token['grupo'] = user.grupo.nombre if user.grupo else None
+        token['grupo_id'] = user.grupo.id if user.grupo else None  # ← AÑADIDO
+        token['grupo_nombre'] = user.grupo.nombre if user.grupo else None
 
         return token
 
@@ -116,7 +117,8 @@ class MyTokenObtainPairSerializer(TokenObtainPairSerializer):
             'first_name': self.user.first_name,
             'last_name': self.user.last_name,
             'email': self.user.email,
-            'grupo': self.user.grupo.nombre if self.user.grupo else None,
+            'grupo_id': self.user.grupo.id if self.user.grupo else None,  # ← AÑADIDO
+            'grupo_nombre': self.user.grupo.nombre if self.user.grupo else None,  # ← AÑADIDO
             'ci': self.user.ci,
             'telefono': self.user.telefono,
             'is_staff': self.user.is_staff,
