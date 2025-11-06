@@ -257,29 +257,53 @@ class UserListView(generics.ListAPIView):
 # Actualizar usuario específico
 # --------------------------
 class UserUpdateView(generics.UpdateAPIView):
-    queryset = Usuario.objects.all()
     serializer_class = UserUpdateSerializer
-    permission_classes = [PuedeActualizar("Usuario")]
+    permission_classes = [IsAuthenticated]
+
+    def get_queryset(self):
+        return Usuario.objects.filter(id=self.request.user.id)
+
+    def get_object(self):
+        return self.request.user
 
     def update(self, request, *args, **kwargs):
         try:
             instance = self.get_object()
             serializer = self.get_serializer(instance, data=request.data, partial=True)
             serializer.is_valid(raise_exception=True)
-            self.perform_update(serializer)
+            
+            # Manejar cambio de contraseña si se proporciona
+            password = request.data.get('password')
+            if password:
+                try:
+                    validate_password(password)
+                    instance.set_password(password)
+                    instance.save()
+                except ValidationError as e:
+                    return Response({
+                        "status": 2,
+                        "error": 1,
+                        "message": "Error en la contraseña",
+                        "errors": {'password': list(e.messages)}
+                    }, status=status.HTTP_400_BAD_REQUEST)
+            
+            user = serializer.save()
+            
+            # Devolver datos actualizados del usuario
+            user_data = UserProfileSerializer(user).data
             
             return Response({
                 "status": 1,
                 "error": 0,
-                "message": "Usuario actualizado correctamente",
-                "values": serializer.data
+                "message": "Perfil actualizado correctamente",
+                "values": user_data
             })
             
         except Exception as e:
             return Response({
                 "status": 2,
                 "error": 1,
-                "message": f"Error al actualizar usuario: {str(e)}"
+                "message": f"Error al actualizar el perfil: {str(e)}"
             }, status=status.HTTP_400_BAD_REQUEST)
 
 # --------------------------
