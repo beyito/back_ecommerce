@@ -9,7 +9,7 @@ from django.contrib.auth import authenticate
 from rest_framework.exceptions import AuthenticationFailed
 from django.db import transaction
 from rest_framework.decorators import api_view
-
+from drf_yasg.utils import swagger_auto_schema
 from .models import Usuario, Grupo
 from . import models
 from . import serializers
@@ -525,7 +525,11 @@ def asignar_privilegios_grupo(request):
 # --------------------------
 # GRUPO
 # --------------------------
-
+@swagger_auto_schema(
+    method='post',
+    request_body=serializers.GrupoSerializer,  # 👈 Le dice a Swagger qué datos espera
+    responses={201: serializers.GrupoSerializer}
+)
 @api_view(['POST'])
 #@requiere_permiso("Grupo","crear") 
 def crear_grupo(request):
