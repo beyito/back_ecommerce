@@ -174,3 +174,9 @@ CORS_ALLOWED_ORIGINS = [
 ]
 
 DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
+
+# ACTUALIZAR DEPENDENCIA
+# pip freeze > requirements.txt 
+
+# INSTALAR DEPENDENCIA
+# pip install -r requirements.txt

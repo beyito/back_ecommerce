@@ -71,3 +71,16 @@ htmlcov/
 .coverage
 .coverage.*
 .coverage
+
+# Dentro de cualquier carpeta "migrations":
+# 1) Ignora la carpeta _pycache_
+**/migrations/_pycache_/
+
+# 2) Ignora TODO lo demás en migrations...
+*/migrations/
+
+# 3) ...pero conserva el _init_.py
+!**/migrations/_init_.py
+
+# Ignorar carpetas __pycache__ y archivos .pyc
+*.cpython-*.pyc
