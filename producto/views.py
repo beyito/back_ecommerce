@@ -10,6 +10,11 @@ from .models import CategoriaModel, SubcategoriaModel, MarcaModel, ProductoModel
 
 # CRUD CATEGORIAS
 # --------------------- Crear Categoria ---------------------
+@swagger_auto_schema(
+    method="post",
+    request_body=CategoriaSerializer,
+    responses={201: CategoriaSerializer} 
+)
 @api_view(['POST'])
 @requiere_permiso("Categoria", "crear")
 def crear_categoria(request):
@@ -30,6 +35,11 @@ def crear_categoria(request):
     })
 
 # --------------------- Editar Categorias ---------------------
+@swagger_auto_schema(
+    method="patch",
+    request_body=CategoriaSerializer,
+    responses={200: CategoriaSerializer} 
+)
 @api_view(['PATCH'])
 @requiere_permiso("Categoria", "actualizar")
 def editar_categoria(request, categoria_id):
@@ -155,6 +165,11 @@ def obtener_categoria_por_id(request, categoria_id):
 
 # CRUD SUBCATEGORIAS
 # --------------------- Crear Subcategoria ---------------------
+@swagger_auto_schema(
+    method="post",
+    request_body=SubcategoriaSerializer,
+    responses={201: SubcategoriaSerializer} 
+)
 @api_view(['POST'])
 @requiere_permiso("Subcategoria", "crear")
 def crear_subcategoria(request):
@@ -175,6 +190,11 @@ def crear_subcategoria(request):
     })  
 
 # --------------------- Editar Subcategoria ---------------------
+@swagger_auto_schema(
+    method="patch",
+    request_body=SubcategoriaSerializer,
+    responses={200: SubcategoriaSerializer} 
+)
 @api_view(['PATCH'])
 @requiere_permiso("Subcategoria", "actualizar")
 def editar_subcategoria(request, subcategoria_id):
@@ -298,6 +318,11 @@ def obtener_subcategoria_por_id(request, subcategoria_id):
 
 # CRUD MARCAS
 # --------------------- Crear Marca ---------------------
+@swagger_auto_schema(
+    method="post",
+    request_body=MarcaSerializer,
+    responses={201: MarcaSerializer} 
+)
 @api_view(['POST'])
 @requiere_permiso("Marca", "crear")
 def crear_marca(request):
@@ -317,6 +342,11 @@ def crear_marca(request):
         "values": serializer.errors
     })
 # --------------------- Actualizar Marca ---------------------
+@swagger_auto_schema(
+    method="patch",
+    request_body=MarcaSerializer,
+    responses={200: MarcaSerializer} 
+)
 @api_view(['PATCH'])
 @requiere_permiso("Marca", "actualizar")
 def editar_marca(request, marca_id):
@@ -464,6 +494,11 @@ def crear_producto(request):
     }, status=400)
 
 # --------------------- Actualizar Producto ---------------------
+@swagger_auto_schema(
+    method="patch",
+    request_body=ProductoSerializer,
+    responses={200: ProductoSerializer} 
+)
 @api_view(['PATCH'])
 @requiere_permiso("Producto", "editar")
 def editar_producto(request, producto_id):

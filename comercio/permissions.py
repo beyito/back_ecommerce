@@ -30,6 +30,10 @@ def requiere_permiso(componente, accion):
         return _wrapped_view
     return decorator
 def has_permission(usuario, componente_nombre, accion):
+# Si es administrador, tiene todos los permisos
+    if hasattr(usuario, "grupo") and usuario.grupo and usuario.grupo.nombre == "administrador":
+        return True
+    
     """Función auxiliar para verificar permisos"""
     
     if not usuario.is_authenticated:

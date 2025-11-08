@@ -22,6 +22,7 @@ urlpatterns = [
     path('editar_privilegio/<int:privilegio_id>', views.editar_privilegio, name='editar_privilegio'), 
     path('eliminar_privilegio/<int:privilegio_id>', views.eliminar_privilegio, name='eliminar_privilegio'), 
     path('listar_privilegios', views.listar_privilegios, name='listar_privilegios'), 
+    path('asignar_privilegios_grupo', views.asignar_privilegios_grupo, name='asignar_privilegios_grupo'),
     
     # --------------------------
     # GRUPO
@@ -31,6 +32,7 @@ urlpatterns = [
     path('editar_grupo/<int:grupo_id>', views.editar_grupo, name='editar_grupo'), 
     path('eliminar_grupo/<int:grupo_id>', views.eliminar_grupo, name='eliminar_grupo'), 
     path('activar_grupo/<int:grupo_id>', views.activar_grupo, name='activar_grupo'), 
+    path('asignar_grupo_usuario', views.asignar_grupo_usuario, name='asignar_grupo_usuario'), #PROBADO
     # --------------------------
     # COMPONENTE    
     # --------------------------

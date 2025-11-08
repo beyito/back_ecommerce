@@ -13,7 +13,8 @@ from drf_yasg.utils import swagger_auto_schema
 from .models import Usuario, Grupo
 from . import models
 from . import serializers
-from .serializers import UserSerializer, MyTokenObtainPairSerializer, UserProfileSerializer, UserUpdateSerializer
+from .serializers import UserSerializer, MyTokenObtainPairSerializer, UserProfileSerializer, UserUpdateSerializer, ComponenteSerializer, PrivilegioSerializer, GrupoSerializer
+from rest_framework import serializers
 from comercio.permissions import PuedeActualizar, PuedeEliminar, PuedeLeer, PuedeCrear,requiere_permiso
 
 # --------------------------
@@ -353,7 +354,7 @@ class UserDeleteView(generics.DestroyAPIView):
 # @requiere_permiso("Privilegio","leer") 
 def listar_privilegios(request):
     privilegios = models.Privilegio.objects.all()
-    serializer = serializers.PrivilegioSerializer(privilegios, many=True)
+    serializer = PrivilegioSerializer(privilegios, many=True)
     return Response({
         "status": 1,
         "error": 0,
@@ -361,7 +362,11 @@ def listar_privilegios(request):
         "values": {"privilegios": serializer.data}
     })
 
-
+@swagger_auto_schema(
+    method="post",
+    request_body=PrivilegioSerializer,
+    responses={201: PrivilegioSerializer} 
+)
 @api_view(['POST'])
 #@requiere_permiso("Privilegio","crear") 
 def asignar_privilegio(request):
@@ -391,7 +396,7 @@ def asignar_privilegio(request):
         defaults=permisos
     )
 
-    serializer = serializers.PrivilegioSerializer(privilegio)
+    serializer = PrivilegioSerializer(privilegio)
     return Response({
         "status": 1,
         "error": 0,
@@ -399,6 +404,11 @@ def asignar_privilegio(request):
         "values": {"privilegio": serializer.data}
     })
 
+@swagger_auto_schema(
+    method="patch",
+    request_body=PrivilegioSerializer,
+    responses={200: PrivilegioSerializer} 
+)
 @api_view(['PATCH'])
 @requiere_permiso("Privilegio","actualizar") 
 def editar_privilegio(request, privilegio_id):
@@ -411,7 +421,7 @@ def editar_privilegio(request, privilegio_id):
 
     privilegio.save()
 
-    serializer = serializers.PrivilegioSerializer(privilegio)
+    serializer = PrivilegioSerializer(privilegio)
     return Response({
         "status": 1,
         "error": 0,
@@ -434,6 +444,11 @@ def eliminar_privilegio(request, privilegio_id):
 # --------------------------
 # ASIGNAR GRUPO A USUARIO
 # --------------------------
+@swagger_auto_schema(
+    method="post",
+    request_body=serializers.Serializer(),
+    responses={201: PrivilegioSerializer} 
+)
 @api_view(['POST'])
 def asignar_grupo_usuario(request):
     username = request.data.get('username')
@@ -461,7 +476,7 @@ def asignar_grupo_usuario(request):
     usuario.grupo = grupo
     usuario.save()
 
-    serializer = serializers.UsuarioSerializer(usuario)
+    serializer = UserSerializer(usuario)
     return Response({
         "status": 1,
         "error": 0,
@@ -472,16 +487,28 @@ def asignar_grupo_usuario(request):
 # --------------------------
 # ASIGNAR PRIVILEGIOS A GRUPO
 # --------------------------
+@swagger_auto_schema(
+    method="post",
+    request_body=serializers.Serializer(),
+    responses={201: PrivilegioSerializer(many=True)}
+)
 @api_view(['POST'])
 def asignar_privilegios_grupo(request):
     grupo_id = request.data.get('grupo_id')
     privilegios = request.data.get('privilegios')  # lista de dicts: [{"componente_id": 1, "puede_leer": True,...}]
 
-    if not grupo_id or not privilegios:
+    if not grupo_id :
         return Response({
             "status": 0,
             "error": 1,
-            "message": "GRUPO_ID y PRIVILEGIOS son requeridos",
+            "message": "GRUPO_ID  son requeridos",
+            "values": None
+        })
+    if not privilegios:
+        return Response({
+            "status": 0,
+            "error": 1,
+            "message": "PRIVILEGIOS son requeridos",
             "values": None
         })
 
@@ -511,7 +538,7 @@ def asignar_privilegios_grupo(request):
                     "puede_eliminar": priv.get("puede_eliminar", False),
                 }
             )
-            resultados.append(serializers.PrivilegioSerializer(obj).data)
+            resultados.append(PrivilegioSerializer(obj).data)
         except:
             continue  # ignorar componentes inválidos
 
@@ -527,8 +554,8 @@ def asignar_privilegios_grupo(request):
 # --------------------------
 @swagger_auto_schema(
     method='post',
-    request_body=serializers.GrupoSerializer,  # 👈 Le dice a Swagger qué datos espera
-    responses={201: serializers.GrupoSerializer}
+    request_body=GrupoSerializer,  # 👈 Le dice a Swagger qué datos espera
+    responses={201: GrupoSerializer}
 )
 @api_view(['POST'])
 #@requiere_permiso("Grupo","crear") 
@@ -553,7 +580,7 @@ def crear_grupo(request):
             "values": None
         })
 
-    serializer = serializers.GrupoSerializer(grupo)
+    serializer = GrupoSerializer(grupo)
     return Response({
         "status": 1,
         "error": 0,
@@ -561,6 +588,11 @@ def crear_grupo(request):
         "values": {"grupo": serializer.data}
     })
 
+@swagger_auto_schema(
+    method='patch',
+    request_body=GrupoSerializer,  # 👈 Le dice a Swagger qué datos espera
+    responses={201: GrupoSerializer}
+)
 @api_view(['PATCH'])
 @requiere_permiso("Grupo","actualizar") 
 def editar_grupo(request, grupo_id):
@@ -572,7 +604,7 @@ def editar_grupo(request, grupo_id):
     grupo.descripcion = descripcion
     grupo.save()
 
-    serializer = serializers.GrupoSerializer(grupo)
+    serializer = GrupoSerializer(grupo)
     return Response({
         "status": 1,
         "error": 0,
@@ -584,7 +616,7 @@ def editar_grupo(request, grupo_id):
 # @requiere_permiso("Grupo","leer") 
 def listar_grupos(request):
     grupos = Grupo.objects.all()
-    serializer = serializers.GrupoSerializer(grupos, many=True)
+    serializer = GrupoSerializer(grupos, many=True)
     return Response({
         "status": 1,
         "error": 0,
@@ -626,7 +658,7 @@ def activar_grupo(request, grupo_id):
 #@requiere_permiso("Componente","leer") 
 def listar_componentes(request):
     componentes = models.Componente.objects.filter(is_active=True)
-    serializer = serializers.ComponenteSerializer(componentes, many=True)
+    serializer = ComponenteSerializer(componentes, many=True)
     return Response({
         "status": 1,
         "error": 0,
@@ -634,18 +666,22 @@ def listar_componentes(request):
         "values": {"componentes": serializer.data}
     })
 
-
+@swagger_auto_schema(
+    method='post',
+    request_body=ComponenteSerializer,  # 👈 Le dice a Swagger qué datos espera
+    responses={201: ComponenteSerializer}
+)
 @api_view(['POST'])
 @requiere_permiso("Componente","crear") 
 def crear_componente(request):
-    serializer = serializers.ComponenteSerializer(data=request.data)
+    serializer = ComponenteSerializer(data=request.data)
     if serializer.is_valid():
         componente = serializer.save()
         return Response({
             "status": 1,
             "error": 0,
             "message": "COMPONENTE CREADO EXITOSAMENTE",
-            "values": {"componente": serializers.ComponenteSerializer(componente).data}
+            "values": {"componente": ComponenteSerializer(componente).data}
         })
     else:
         return Response({
@@ -655,19 +691,23 @@ def crear_componente(request):
             "values": serializer.errors
         })
 
-
+@swagger_auto_schema(
+    method='patch',
+    request_body=ComponenteSerializer,  # 👈 Le dice a Swagger qué datos espera
+    responses={201: ComponenteSerializer}
+)
 @api_view(['PATCH'])
 @requiere_permiso("Componente","actualizar") 
 def editar_componente(request, componente_id):
     componente = get_object_or_404(models.Componente, id=componente_id)
-    serializer = serializers.ComponenteSerializer(componente, data=request.data, partial=True)
+    serializer = ComponenteSerializer(componente, data=request.data, partial=True)
     if serializer.is_valid():
         componente = serializer.save()
         return Response({
             "status": 1,
             "error": 0,
             "message": "COMPONENTE ACTUALIZADO EXITOSAMENTE",
-            "values": {"componente": serializers.ComponenteSerializer(componente).data}
+            "values": {"componente": ComponenteSerializer(componente).data}
         })
     else:
         return Response({
