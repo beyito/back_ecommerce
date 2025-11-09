@@ -4,5 +4,5 @@ from django.urls import path
 from . import views
 urlpatterns = [
 # CRUD CATEGORIA
-    path('añadir_producto_carrito', views.añadir_producto_carrito, name='añadir_producto_carrito'),
+    path('agregar_producto_carrito', views.agregar_producto_carrito, name='agregar_producto_carrito'),
 ]

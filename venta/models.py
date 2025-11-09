@@ -22,7 +22,7 @@ class DetalleCarritoModel(models.Model):
     producto = models.ForeignKey(ProductoModel, on_delete=models.CASCADE, related_name="producto_detalles_carrito")
     cantidad = models.IntegerField(default=1)
     precio_unitario = models.DecimalField(max_digits=12, decimal_places=2)
-    subtotal = models.DecimalField(max_digits=12, decimal_places=2)
+    subtotal = models.DecimalField(max_digits=12, decimal_places=2, default = 0.00)
     is_active = models.BooleanField(default=True)
 
     def __str__(self):

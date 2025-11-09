@@ -9,7 +9,7 @@ class CarritoSerializer(serializers.ModelSerializer):
 class DetalleCarritoSerializer(serializers.ModelSerializer):
     class Meta:
         model = DetalleCarritoModel
-        fields = ['id', 'carrito', 'producto', 'cantidad', 'precio']
+        fields = ['id', 'carrito', 'producto', 'cantidad', 'precio_unitario','subtotal']
         read_only_fields = ['id']
 
 class FormaPagoSerializer(serializers.ModelSerializer):
@@ -27,5 +27,5 @@ class PedidoSerializer(serializers.ModelSerializer):
 class DetallePedidoSerializer(serializers.ModelSerializer):
     class Meta:
         model = DetallePedidoModel
-        fields = ['id', 'pedido', 'producto', 'cantidad', 'precio']
+        fields = ['id', 'pedido', 'producto', 'cantidad', 'precio_unitario']
         read_only_fields = ['id']

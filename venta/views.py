@@ -15,7 +15,7 @@ from django.db.models import Q
 
 @api_view(['POST'])
 @swagger_auto_schema(operation_description="Añadir producto al carrito de compras")
-def añadir_producto_carrito(request):
+def agregar_producto_carrito(request):
     usuario = request.user
     producto_id = request.data.get('producto_id')
     producto = ProductoModel.objects.get(id=producto_id)
@@ -27,6 +27,7 @@ def añadir_producto_carrito(request):
             "values": {}
         })
     cantidad = request.data.get('cantidad', 1)
+    precio_unitario = producto.precio_contado
     if cantidad > producto.stock:
         return Response({
             "status": 0,
@@ -37,27 +38,50 @@ def añadir_producto_carrito(request):
     carrito = CarritoModel.objects.filter(usuario=usuario, is_active=True).first()
     if not carrito:
         carrito = CarritoModel.objects.create(usuario=usuario)
-
     # Añadir producto al carrito
-    serializer = DetalleCarritoSerializer(data={
-        'carrito': carrito.id,
-        'producto': producto,
-        'cantidad': cantidad
-    })
-    if serializer.is_valid():
-        serializer.save()
-        return Response({
-            "status": 1,
-            "error": 0,
-            "message": "Producto añadido al carrito con éxito",
-            "values": {"detalle": serializer.data}
+    subtotal = precio_unitario * cantidad
+    carrito.total += subtotal
+    carrito.save()
+    detalle_carrito = DetalleCarritoModel.objects.filter(
+        carrito=carrito,
+        producto=producto_id
+    ).first()
+    
+    if detalle_carrito:
+        # Actualizar cantidad y subtotal
+        detalle_carrito.cantidad += cantidad
+        detalle_carrito.subtotal += subtotal
+        detalle_carrito.save()
+        
+        # Serializar objeto existente
+        serializer = DetalleCarritoSerializer(detalle_carrito)  # ❌ NO data=
+    else:
+        # Crear nuevo detalle
+        serializer = DetalleCarritoSerializer(data={
+            'carrito': carrito.id,
+            'producto': producto_id,
+            'cantidad': cantidad,
+            'precio_unitario': precio_unitario,
+            'subtotal': subtotal,
         })
+        if serializer.is_valid():
+            serializer.save()
+        else:
+            return Response({
+                "status": 0,
+                "error": 1,
+                "message": "Error al añadir producto al carrito",
+                "values": serializer.errors
+            })
+    
     return Response({
-        "status": 0,
-        "error": 1,
-        "message": "Error al añadir producto al carrito",
-        "values": serializer.errors
+        "status": 1,
+        "error": 0,
+        "message": "Producto añadido al carrito con éxito",
+        "values": {"detalle": serializer.data}
     })
+
+
 
 # --------------------- Crear Categoria ---------------------
 # @swagger_auto_schema(
