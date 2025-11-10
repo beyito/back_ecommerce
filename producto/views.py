@@ -563,21 +563,52 @@ def crear_productos_lista(request):
 def editar_producto(request, producto_id):
     try:
         producto = ProductoModel.objects.get(id=producto_id)
-        serializer = ProductoSerializer(producto, data=request.data, partial=True)
+        data = request.data.copy()
+
+        # Guardamos precios antiguos para comparar
+        precio_anterior = producto.precio_contado
+        precio_cuota_anterior = producto.precio_cuota
+
+        serializer = ProductoSerializer(producto, data=data, partial=True)
         if serializer.is_valid():
             serializer.save()
+            
+            # Obtenemos los precios nuevos (por si se actualizaron)
+            precio_nuevo = serializer.validated_data.get(
+                "precio_contado", producto.precio_contado
+            )
+            precio_cuota_nuevo = serializer.validated_data.get(
+                "precio_cuota", producto.precio_cuota
+            )
+
+            # Si hubo cambios en alguno de los precios → registrar cambio
+            if (
+                precio_anterior != precio_nuevo
+                or precio_cuota_anterior != precio_cuota_nuevo
+            ):
+                from .models import CambioPrecioModel
+                CambioPrecioModel.objects.create(
+                    producto=producto,
+                    precio_anterior=precio_anterior,
+                    precio_nuevo=precio_nuevo,
+                    precio_cuota_anterior=precio_cuota_anterior,
+                    precio_cuota_nuevo=precio_cuota_nuevo,
+                )
+
             return Response({
                 "status": 1,
                 "error": 0,
                 "message": "Producto actualizado correctamente",
                 "values": {"producto": serializer.data}
             })
+
         return Response({
             "status": 0,
             "error": 1,
             "message": "Error al actualizar Producto",
             "values": serializer.errors
         })
+
     except ProductoModel.DoesNotExist:
         return Response({
             "status": 0,
@@ -585,7 +616,6 @@ def editar_producto(request, producto_id):
             "message": "Producto no encontrado",
             "values": {}
         })
-
 # --------------------- Eliminar ( desactivar ) Producto ---------------------
 @api_view(['DELETE'])
 @requiere_permiso("Producto", "eliminar")
