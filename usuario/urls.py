@@ -9,7 +9,7 @@ urlpatterns = [
     path('login/', views.MyTokenObtainPairView.as_view(), name='login'),
     path('logout/', views.LogoutView.as_view(), name='logout'),
     path('profile/', views.UserProfileView.as_view(), name='profile'),
-    
+    path('register/bulk/', views.bulk_register, name='bulk_register'),
     # Gestión de usuarios (CRUD)
     path('users/', views.UserListView.as_view(), name='user-list'),           # Listar todos
     path('profile/update/', views.UserUpdateView.as_view(), name='user-update'), # Actualizar perfil

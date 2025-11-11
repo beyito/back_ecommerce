@@ -430,6 +430,7 @@ def asignar_privilegio(request):
     permisos = {
         "puede_leer": request.data.get("puede_leer", False),
         "puede_crear": request.data.get("puede_crear", False),
+        "puede_activar": request.data.get("puede_activar", False),
         "puede_actualizar": request.data.get("puede_actualizar", False),
         "puede_eliminar": request.data.get("puede_eliminar", False),
     }
@@ -727,7 +728,7 @@ def listar_componentes(request):
     responses={201: ComponenteSerializer}
 )
 @api_view(['POST'])
-@requiere_permiso("Componente","crear") 
+# @requiere_permiso("Componente","crear") 
 def crear_componente(request):
     serializer = ComponenteSerializer(data=request.data)
     if serializer.is_valid():
@@ -824,3 +825,67 @@ def registrar_token(request):
                 "message": "Se registró el token",
                 "values": token,
     })
+
+@api_view(['POST'])
+@transaction.atomic
+def bulk_register(request):
+    try:
+        data = request.data.get("usuarios", None)
+
+        if not data or not isinstance(data, list):
+            return Response({
+                "status": 0,
+                "error": 1,
+                "message": "El campo 'usuarios' debe ser una lista de usuarios a registrar",
+                "values": {}
+            }, status=status.HTTP_400_BAD_REQUEST)
+
+        usuarios_creados = []
+        errores = []
+
+        for i, user_data in enumerate(data, start=1):
+            # Asegurar grupo por defecto
+            if "grupo" not in user_data:
+                user_data["grupo"] = 2
+
+            serializer = UserSerializer(data=user_data)
+
+            if serializer.is_valid():
+                user = serializer.save()
+
+                usuarios_creados.append({
+                    "id": user.id,
+                    "username": user.username,
+                    "first_name": user.first_name,
+                    "last_name": user.last_name,
+                    "email": user.email,
+                    "ci": user.ci,
+                    "telefono": user.telefono,
+                    "grupo_id": user.grupo.id if user.grupo else None,
+                    "grupo_nombre": user.grupo.nombre if user.grupo else None,
+                })
+            else:
+                errores.append({
+                    "index": i,
+                    "username": user_data.get("username", "desconocido"),
+                    "errores": serializer.errors
+                })
+
+        return Response({
+            "status": 1 if not errores else 2,
+            "error": 0 if not errores else 1,
+            "message": "Usuarios registrados correctamente" if not errores else "Algunos usuarios no pudieron registrarse",
+            "values": {
+                "usuarios_creados": usuarios_creados,
+                "errores": errores
+            }
+        }, status=status.HTTP_201_CREATED if not errores else status.HTTP_207_MULTI_STATUS)
+
+    except Exception as e:
+        print("💥 Error general:", str(e))
+        return Response({
+            "status": 2,
+            "error": 1,
+            "message": f"Error general: {str(e)}",
+            "values": {}
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
