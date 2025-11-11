@@ -1,11 +1,13 @@
+from datetime import datetime, timedelta
 from django.shortcuts import render
+from drf_yasg import openapi
 # from utils.encrypted_logger import registrar_accion
 from comercio.permissions import requiere_permiso 
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from drf_yasg.utils import swagger_auto_schema
 from .serializers import CategoriaSerializer, SubcategoriaSerializer, MarcaSerializer, ProductoSerializer, ImagenProductoSerializer
-from .models import CategoriaModel, SubcategoriaModel, MarcaModel, ProductoModel
+from .models import CategoriaModel, SubcategoriaModel, MarcaModel, ProductoModel, CambioPrecioModel
 from django.core.paginator import Paginator, EmptyPage
 from django.db.models import Q
 # Create your views here.
@@ -831,3 +833,380 @@ def buscar_productos(request):
             "message": f"Error en la búsqueda: {str(e)}",
             "values": {}
         }, status=400)
+    
+# --------------------- Obtener Historial de Precios (Ambos Tipos) ---------------------
+@swagger_auto_schema(
+    method="get",
+    manual_parameters=[
+        openapi.Parameter(
+            'meses',
+            openapi.IN_QUERY,
+            description="Número de meses a consultar (default: 24)",
+            type=openapi.TYPE_INTEGER,
+            default=24
+        ),
+        openapi.Parameter(
+            'tipo',
+            openapi.IN_QUERY,
+            description="Tipo de precio: 'contado', 'cuota' o 'ambos' (default: ambos)",
+            type=openapi.TYPE_STRING,
+            default='ambos',
+            enum=['contado', 'cuota', 'ambos']
+        )
+    ],
+    responses={
+        200: openapi.Response(
+            description="Historial de precios obtenido correctamente",
+            examples={
+                "application/json": {
+                    "status": 1,
+                    "error": 0,
+                    "message": "Historial de precios obtenido correctamente",
+                    "values": {
+                        "producto": {
+                            "id": 1,
+                            "nombre": "Refrigerador French Door Samsung",
+                            "precio_actual_contado": 15100.00,
+                            "precio_actual_cuota": 15800.00
+                        },
+                        "periodo": {
+                            "meses": 24,
+                            "fecha_inicio": "2023-11-10",
+                            "fecha_fin": "2025-11-10"
+                        },
+                        "estadisticas": {
+                            "contado": {
+                                "precio_maximo": 16500.00,
+                                "precio_minimo": 14200.00,
+                                "precio_promedio": 15250.50,
+                                "variacion_maxima": 12.5,
+                                "variacion_minima": -8.2,
+                                "variacion_promedio": 1.2,
+                                "total_cambios": 15,
+                                "tendencia": "subida"
+                            },
+                            "cuota": {
+                                "precio_maximo": 17200.00,
+                                "precio_minimo": 14800.00,
+                                "precio_promedio": 15980.25,
+                                "variacion_maxima": 10.8,
+                                "variacion_minima": -7.5,
+                                "variacion_promedio": 0.9,
+                                "total_cambios": 12,
+                                "tendencia": "subida"
+                            }
+                        },
+                        "datos_grafica": {
+                            "labels": ["2023-11-15", "2024-01-20", "2024-03-10"],
+                            "contado": {
+                                "precios": [14200.00, 14500.00, 15200.00],
+                                "variaciones_porcentuales": [0, 2.11, 4.83]
+                            },
+                            "cuota": {
+                                "precios": [14800.00, 15000.00, 15500.00],
+                                "variaciones_porcentuales": [0, 1.35, 3.33]
+                            }
+                        }
+                    }
+                }
+            }
+        )
+    }
+)
+@api_view(['GET'])
+@requiere_permiso("Producto", "ver")
+def obtener_historial_precios(request, producto_id):
+    """
+    Obtiene el historial de cambios de precio de un producto para gráficas
+    """
+   
+# Obtener ambos tipos (default)
+# GET /obtener_historial_precios_producto/8/
+
+# Obtener solo contado
+# GET /obtener_historial_precios_producto/8/?tipo=contado
+
+# Obtener solo cuota
+# GET /obtener_historial_precios_producto/8/?tipo=cuota
+
+# Obtener ambos con período específico (meses atrás)
+# GET /obtener_historial_precios_producto/8/?meses=12&tipo=ambos
+    
+    try:
+        # Verificar que el producto existe
+        producto = ProductoModel.objects.get(id=producto_id)
+        
+        # Obtener parámetros de la consulta
+        meses = int(request.GET.get('meses', 24))
+        tipo_precio = request.GET.get('tipo', 'ambos')  # Default: ambos
+        
+        # Validar parámetros
+        if meses <= 0:
+            return Response({
+                "status": 0,
+                "error": 1,
+                "message": "El parámetro 'meses' debe ser mayor a 0",
+                "values": {}
+            })
+        
+        if tipo_precio not in ['contado', 'cuota', 'ambos']:
+            return Response({
+                "status": 0,
+                "error": 1,
+                "message": "El parámetro 'tipo' debe ser 'contado', 'cuota' o 'ambos'",
+                "values": {}
+            })
+        
+        # Calcular fecha de inicio
+        fecha_fin = datetime.now().date()
+        fecha_inicio = fecha_fin - timedelta(days=meses * 30)
+        
+        # Obtener cambios de precio en el período
+        cambios = CambioPrecioModel.objects.filter(
+            producto_id=producto_id,
+            fecha_cambio__gte=fecha_inicio,
+            fecha_cambio__lte=fecha_fin
+        ).order_by('fecha_cambio')
+        
+        # Preparar datos según el tipo solicitado
+        if tipo_precio == 'ambos':
+            datos_grafica = preparar_datos_grafica_ambos(cambios)
+            estadisticas = calcular_estadisticas_ambos(cambios)
+        else:
+            datos_grafica = preparar_datos_grafica_individual(cambios, tipo_precio)
+            estadisticas = {
+                tipo_precio: calcular_estadisticas_individual(cambios, tipo_precio)
+            }
+        
+        return Response({
+            "status": 1,
+            "error": 0,
+            "message": "Historial de precios obtenido correctamente",
+            "values": {
+                "producto": {
+                    "id": producto.id,
+                    "nombre": producto.nombre,
+                    "precio_actual_contado": float(producto.precio_contado),
+                    "precio_actual_cuota": float(producto.precio_cuota),
+                },
+                "periodo": {
+                    "meses": meses,
+                    "fecha_inicio": fecha_inicio.isoformat(),
+                    "fecha_fin": fecha_fin.isoformat(),
+                },
+                "estadisticas": estadisticas,
+                "datos_grafica": datos_grafica,
+            }
+        })
+        
+    except ProductoModel.DoesNotExist:
+        return Response({
+            "status": 0,
+            "error": 1,
+            "message": "Producto no encontrado",
+            "values": {}
+        })
+    except Exception as e:
+        return Response({
+            "status": 0,
+            "error": 1,
+            "message": f"Error al obtener historial: {str(e)}",
+            "values": {}
+        })
+# --------------------- Funciones Auxiliares ---------------------
+def preparar_datos_grafica_ambos(cambios):
+    """
+    Prepara los datos en formato para gráficas para ambos tipos de precio
+    """
+    labels = []  # Fechas (compartidas)
+    datos_contado = {
+        'precios': [],
+        'variaciones_porcentuales': []
+    }
+    datos_cuota = {
+        'precios': [],
+        'variaciones_porcentuales': []
+    }
+    
+    precio_anterior_contado = None
+    precio_anterior_cuota = None
+    
+    for cambio in cambios:
+        # Agregar fecha a labels (solo una vez por cambio)
+        labels.append(cambio.fecha_cambio.isoformat())
+        
+        # Datos para contado
+        precio_actual_contado = cambio.precio_nuevo
+        datos_contado['precios'].append(float(precio_actual_contado))
+        
+        if precio_anterior_contado is not None and precio_anterior_contado > 0:
+            variacion_contado = ((precio_actual_contado - precio_anterior_contado) / precio_anterior_contado) * 100
+            datos_contado['variaciones_porcentuales'].append(float(variacion_contado))
+        else:
+            datos_contado['variaciones_porcentuales'].append(0.0)
+        
+        # Datos para cuota
+        precio_actual_cuota = cambio.precio_cuota_nuevo
+        datos_cuota['precios'].append(float(precio_actual_cuota))
+        
+        if precio_anterior_cuota is not None and precio_anterior_cuota > 0:
+            variacion_cuota = ((precio_actual_cuota - precio_anterior_cuota) / precio_anterior_cuota) * 100
+            datos_cuota['variaciones_porcentuales'].append(float(variacion_cuota))
+        else:
+            datos_cuota['variaciones_porcentuales'].append(0.0)
+        
+        # Actualizar precios anteriores
+        precio_anterior_contado = precio_actual_contado
+        precio_anterior_cuota = precio_actual_cuota
+    
+    return {
+        'labels': labels,
+        'contado': datos_contado,
+        'cuota': datos_cuota
+    }
+
+def preparar_datos_grafica_individual(cambios, tipo_precio):
+    """
+    Prepara los datos en formato para gráficas para un tipo individual
+    """
+    labels = []
+    datos_precio = []
+    datos_variacion = []
+    
+    precio_anterior = None
+    
+    for cambio in cambios:
+        # Determinar qué precio usar según el tipo
+        if tipo_precio == 'cuota':
+            precio_actual = cambio.precio_cuota_nuevo
+        else:
+            precio_actual = cambio.precio_nuevo
+        
+        labels.append(cambio.fecha_cambio.isoformat())
+        datos_precio.append(float(precio_actual))
+        
+        # Calcular variación porcentual
+        if precio_anterior is not None and precio_anterior > 0:
+            variacion = ((precio_actual - precio_anterior) / precio_anterior) * 100
+            datos_variacion.append(float(variacion))
+        else:
+            datos_variacion.append(0.0)
+        
+        precio_anterior = precio_actual
+    
+    return {
+        'labels': labels,
+        tipo_precio: {
+            'precios': datos_precio,
+            'variaciones_porcentuales': datos_variacion
+        }
+    }
+
+def calcular_estadisticas_ambos(cambios):
+    """
+    Calcula estadísticas para ambos tipos de precio
+    """
+    return {
+        'contado': calcular_estadisticas_individual(cambios, 'contado'),
+        'cuota': calcular_estadisticas_individual(cambios, 'cuota')
+    }
+
+def calcular_estadisticas_individual(cambios, tipo_precio):
+    """
+    Calcula estadísticas sobre los cambios de precio para un tipo específico
+    """
+    if not cambios:
+        return {}
+    
+    precios = []
+    variaciones = []
+    
+    precio_anterior = None
+    
+    for cambio in cambios:
+        if tipo_precio == 'cuota':
+            precio_actual = cambio.precio_cuota_nuevo
+        else:
+            precio_actual = cambio.precio_nuevo
+        
+        precios.append(float(precio_actual))
+        
+        if precio_anterior is not None and precio_anterior > 0:
+            variacion = ((precio_actual - precio_anterior) / precio_anterior) * 100
+            variaciones.append(float(variacion))
+        
+        precio_anterior = precio_actual
+    
+    estadisticas = {
+        'precio_maximo': max(precios) if precios else 0,
+        'precio_minimo': min(precios) if precios else 0,
+        'precio_promedio': sum(precios) / len(precios) if precios else 0,
+        'total_cambios': len(cambios),
+    }
+    
+    if variaciones:
+        estadisticas.update({
+            'variacion_maxima': max(variaciones),
+            'variacion_minima': min(variaciones),
+            'variacion_promedio': sum(variaciones) / len(variaciones),
+            'tendencia': 'subida' if variaciones[-1] > 0 else 'bajada' if variaciones[-1] < 0 else 'estable'
+        })
+    else:
+        estadisticas.update({
+            'variacion_maxima': 0,
+            'variacion_minima': 0,
+            'variacion_promedio': 0,
+            'tendencia': 'estable'
+        })
+    
+    return estadisticas
+
+def calcular_estadisticas_precios(cambios, tipo_precio):
+    """
+    Calcula estadísticas sobre los cambios de precio
+    """
+    if not cambios:
+        return {}
+    
+    precios = []
+    variaciones = []
+    
+    precio_anterior = None
+    
+    for cambio in cambios:
+        if tipo_precio == 'cuota':
+            precio_actual = cambio.precio_cuota_nuevo
+        else:
+            precio_actual = cambio.precio_nuevo
+        
+        precios.append(float(precio_actual))
+        
+        if precio_anterior is not None and precio_anterior > 0:
+            variacion = ((precio_actual - precio_anterior) / precio_anterior) * 100
+            variaciones.append(float(variacion))
+        
+        precio_anterior = precio_actual
+    
+    estadisticas = {
+        'precio_maximo': max(precios) if precios else 0,
+        'precio_minimo': min(precios) if precios else 0,
+        'precio_promedio': sum(precios) / len(precios) if precios else 0,
+        'total_cambios': len(cambios),
+    }
+    
+    if variaciones:
+        estadisticas.update({
+            'variacion_maxima': max(variaciones),
+            'variacion_minima': min(variaciones),
+            'variacion_promedio': sum(variaciones) / len(variaciones),
+            'tendencia': 'subida' if variaciones[-1] > 0 else 'bajada' if variaciones[-1] < 0 else 'estable'
+        })
+    else:
+        estadisticas.update({
+            'variacion_maxima': 0,
+            'variacion_minima': 0,
+            'variacion_promedio': 0,
+            'tendencia': 'estable'
+        })
+    
+    return estadisticas

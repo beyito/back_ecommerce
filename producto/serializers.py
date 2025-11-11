@@ -155,3 +155,16 @@ class ProductoSerializer(serializers.ModelSerializer):
                     )
 
         return instance
+    
+class CambioPrecioSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = CambioPrecioModel
+        fields = [
+            'id',
+            'precio_anterior',
+            'precio_nuevo', 
+            'precio_cuota_anterior',
+            'precio_cuota_nuevo',
+            'fecha_cambio',
+            'producto_id'
+        ]

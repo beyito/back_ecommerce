@@ -38,4 +38,7 @@ urlpatterns = [
     path('buscar_productos', views.buscar_productos, name='buscar_productos'),
     path('crear_productos_lista', views.crear_productos_lista, name='crear_productos_lista'),
 
+# GRAFICAS DE CAMBIO PRECIO
+    path('obtener_historial_precios_producto/<int:producto_id>/', views.obtener_historial_precios, name='obtener_historial_precios_producto'),
+
 ]
