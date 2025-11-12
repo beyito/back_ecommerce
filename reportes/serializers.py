@@ -84,3 +84,15 @@ class UsuarioReporteSerializer(serializers.ModelSerializer):
             'id', 'username', 'first_name', 'last_name', 'email', 
             'ci', 'telefono', 'date_joined', 'is_active', 'grupo_nombre'
         ]
+# En serializers.py - Agrega este serializer
+class VentasAgrupadasSerializer(serializers.Serializer):
+    """Serializer para datos de ventas agrupadas"""
+    producto_id = serializers.IntegerField(required=False)
+    producto_nombre = serializers.CharField(required=False)
+    categoria_nombre = serializers.CharField(required=False, allow_null=True)
+    marca_nombre = serializers.CharField(required=False, allow_null=True)
+    cliente = serializers.CharField(required=False, allow_null=True)
+    total_vendido = serializers.IntegerField(required=False)
+    unidades_vendidas = serializers.IntegerField(required=False)
+    ingresos_totales = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)
+    promedio_venta = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)

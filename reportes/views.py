@@ -23,7 +23,7 @@ from django.utils import timezone
 from usuario.models import Usuario, Grupo
 from producto.models import ProductoModel, CategoriaModel, SubcategoriaModel, MarcaModel, CambioPrecioModel
 from venta.models import CarritoModel, DetalleCarritoModel, PedidoModel, DetallePedidoModel, FormaPagoModel, PlanPagoModel, PagoModel, MetodoPagoModel
-from .serializers import UsuarioReporteSerializer, CarritoReporteSerializer, PedidoReporteSerializer, DetallePedidoReporteSerializer, PagoReporteSerializer, PlanPagoReporteSerializer, ProductoReporteSerializer, CategoriaReporteSerializer, MarcaReporteSerializer
+from .serializers import UsuarioReporteSerializer, CarritoReporteSerializer, PedidoReporteSerializer, DetallePedidoReporteSerializer, PagoReporteSerializer, PlanPagoReporteSerializer, ProductoReporteSerializer, CategoriaReporteSerializer, MarcaReporteSerializer,VentasAgrupadasSerializer
 # from .permissions import IsAdminOrStaff
 from .generators import generar_reporte_pdf, generar_reporte_excel
 
@@ -103,34 +103,76 @@ def _normalize_interpretacion(data: dict, default_tipo="productos"):
     return out
 
 def _naive_interpret(user_prompt: str):
-    """Interpretación básica sin Gemini"""
+    """Interpretación básica mejorada sin Gemini"""
     p = (user_prompt or "").lower()
-    tipo = "productos"
-    if "pedido" in p or "venta" in p: tipo = "pedidos"
-    elif "pago" in p or "cuota" in p: tipo = "pagos"
-    elif "cliente" in p or "usuario" in p: tipo = "clientes"
-    elif "carrito" in p: tipo = "carritos"
-    elif "categoria" in p: tipo = "categorias"
-    elif "marca" in p: tipo = "marcas"
-    elif "inventario" in p or "stock" in p: tipo = "inventario"
     
-    calculos = {}
-    if "cantidad" in p or "conteo" in p or "total" in p:
-        calculos = {"cantidad": "Count('id')"}
-    if "suma" in p or "monto" in p:
-        calculos = {"total": "Sum('total')"}
+    # Detección mejorada de marcas
+    marcas_detectadas = []
+    if "samsung" in p: marcas_detectadas.append("Samsung")
+    if "lg" in p: marcas_detectadas.append("LG") 
+    if "panasonic" in p: marcas_detectadas.append("Panasonic")
+    if "mabe" in p: marcas_detectadas.append("Mabe")
+    if "whirlpool" in p: marcas_detectadas.append("Whirlpool")
+    
+    tipo = "productos"
+    if "pedido" in p or "venta" in p: 
+        tipo = "pedidos"
+    elif "producto" in p and ("vendido" in p or "más vendido" in p or "top" in p):
+        tipo = "ventas"
+    elif "pago" in p or "cuota" in p: 
+        tipo = "pagos"
+    elif "cliente" in p or "usuario" in p: 
+        tipo = "clientes"
+    elif "carrito" in p: 
+        tipo = "carritos"
+    elif "categoria" in p: 
+        tipo = "categorias"
+    elif "marca" in p: 
+        tipo = "marcas"
+    elif "inventario" in p or "stock" in p: 
+        tipo = "inventario"
     
     filtros = {}
-    if "activo" in p: filtros["is_active"] = True
-    if "inactivo" in p: filtros["is_active"] = False
-    if "stock bajo" in p: filtros["stock__lt"] = 5
-    if "sin stock" in p: filtros["stock"] = 0
-    if "pagado" in p: filtros["estado"] = "pagado"
-    if "pendiente" in p: filtros["estado"] = "pendiente"
+    if marcas_detectadas:
+        # Usar filtro exacto para marcas
+        filtros["marca__nombre__iexact"] = marcas_detectadas[0]
+    
+    if "activo" in p: 
+        filtros["is_active"] = True
+    if "inactivo" in p: 
+        filtros["is_active"] = False
+    if "stock bajo" in p: 
+        filtros["stock__lt"] = 5
+    if "sin stock" in p: 
+        filtros["stock"] = 0
+    if "pagado" in p: 
+        filtros["estado__iexact"] = "pagado"
+    if "pendiente" in p: 
+        filtros["estado__iexact"] = "pendiente"
+    
+    # Para consultas de "más vendidos", usar ventas
+    if tipo == "ventas":
+        agrupacion = ["producto__id", "producto__nombre"]
+        calculos = {"unidades_vendidas": "Sum('cantidad')"}
+        orden = ["-unidades_vendidas"]
+        
+        # Agregar filtro de marca si se detectó
+        if marcas_detectadas:
+            filtros["producto__marca__nombre__iexact"] = marcas_detectadas[0]
+            filtros["pedido__estado__iexact"] = "pagado"
+    else:
+        agrupacion = []
+        calculos = {}
+        orden = []
     
     return _normalize_interpretacion({
-        "tipo_reporte": tipo, "formato": "pantalla", "filtros": filtros,
-        "agrupacion": [], "calculos": calculos, "orden": [], "error": None,
+        "tipo_reporte": tipo, 
+        "formato": "pantalla", 
+        "filtros": filtros,
+        "agrupacion": agrupacion, 
+        "calculos": calculos, 
+        "orden": orden, 
+        "error": None,
     })
 
 # ===================================================================
@@ -237,6 +279,7 @@ class ReporteBaseView(APIView):
             "ventas": DetallePedidoReporteSerializer,
             "inventario": ProductoReporteSerializer,  # Reutiliza el de productos
             "planes_pago": PlanPagoReporteSerializer,
+            "ventas_agrupadas":VentasAgrupadasSerializer
         }
         return serializer_map.get(tipo_reporte)
 
@@ -256,8 +299,10 @@ class ReporteBaseView(APIView):
             return PagoModel, PagoModel.objects.select_related('plan_pago', 'metodo_pago')
         elif tipo_reporte == "clientes":
             return Usuario, Usuario.objects.all()
-        elif tipo_reporte == "ventas":
-            return DetallePedidoModel, DetallePedidoModel.objects.select_related('pedido', 'producto')
+        elif tipo_reporte == "ventas":  # 👈 MEJORADO para ventas/detalles
+            return DetallePedidoModel, DetallePedidoModel.objects.select_related(
+                'pedido', 'pedido__usuario', 'producto', 'producto__marca'
+            )
         elif tipo_reporte == "inventario":
             return ProductoModel, ProductoModel.objects.select_related('marca', 'subcategoria')
         elif tipo_reporte == "planes_pago":
@@ -272,6 +317,17 @@ class ReporteBaseView(APIView):
         agrupacion_list = interpretacion.get("agrupacion", [])
         calculos_dict = interpretacion.get("calculos", {})
         orden_list = interpretacion.get("orden", [])
+        limite = interpretacion.get("limite")
+
+        print(f"🎯 Interpretación recibida:")
+        print(f"   Tipo: {tipo}")
+        print(f"   Filtros originales: {filtros_dict}")
+
+        # 👈 CORREGIR FILTROS DE MARCA AUTOMÁTICAMENTE
+        filtros_dict = self._corregir_filtros_por_tipo(tipo,filtros_dict)
+        print(f"   Filtros corregidos: {filtros_dict}")
+        # Obtener modelo y queryset base
+        ModelClass, base_queryset = self._get_model_and_queryset(tipo)
 
         # Obtener modelo y queryset base
         ModelClass, base_queryset = self._get_model_and_queryset(tipo)
@@ -280,10 +336,22 @@ class ReporteBaseView(APIView):
         q_filtros = Q()
         for lookup, value in dict(filtros_dict).items():
             try:
+                # Manejar fechas relativas (si las tienes)
+                if isinstance(value, str) and value.startswith("RELATIVE:"):
+                    if value == "RELATIVE:LAST_MONTH":
+                        first_day = timezone.now().replace(day=1) - timedelta(days=1)
+                        first_day = first_day.replace(day=1)
+                        last_day = timezone.now().replace(day=1) - timedelta(days=1)
+                        value = [first_day, last_day]
+                    elif value == "RELATIVE:LAST_30_DAYS":
+                        value = [timezone.now() - timedelta(days=30), timezone.now()]
+                
                 converted_value = self._validate_and_convert_value(ModelClass, lookup, value)
                 q_filtros &= Q(**{lookup: converted_value})
+                print(f"   ✅ Filtro aplicado: {lookup} = {converted_value}")
             except (FieldDoesNotExist, ValueError, TypeError) as e:
                 print(f"[WARN] Skipping invalid filter: {lookup}={repr(value)}. Reason: {e}")
+                print(f"   ❌ Filtro ignorado: {lookup}={repr(value)}. Razón: {e}")
                 continue
 
         queryset = base_queryset.filter(q_filtros)
@@ -376,20 +444,75 @@ class ReporteBaseView(APIView):
             orden = orden_por_defecto.get(tipo, ['-id'])
             queryset = queryset.order_by(*orden)
 
-        return queryset, hubo_agrupacion
+        # 👈 APLICAR LÍMITE SI EXISTE
+        if limite and isinstance(limite, int) and limite > 0:
+            queryset = queryset[:limite]
+        else:
+            queryset = queryset[:MAX_ROWS]  # Límite por defecto
 
+        return queryset, hubo_agrupacion
+    
+    # En ReporteBaseView, actualiza el método _corregir_filtros_marca
+    def _corregir_filtros_por_tipo(self, tipo_reporte, filtros_dict):
+        """Corrige automáticamente los filtros según el tipo de reporte"""
+        filtros_corregidos = {}
+        
+        for lookup, value in filtros_dict.items():
+            # Para reportes de "ventas" (DetallePedidoModel), ajustar los filtros
+            if tipo_reporte == "ventas":
+                # Si el filtro es de marca pero no está prefijado con producto__
+                if lookup in ['marca__nombre__iexact', 'marca__nombre__icontains']:
+                    nuevo_lookup = f"producto__{lookup}"
+                    filtros_corregidos[nuevo_lookup] = value
+                    print(f"🔧 Corrección ventas: {lookup} → {nuevo_lookup}")
+                # Si el filtro es de categoría pero no está prefijado con producto__
+                elif lookup in ['categoria__nombre__iexact', 'categoria__nombre__icontains', 
+                            'subcategoria__nombre__iexact', 'subcategoria__nombre__icontains']:
+                    nuevo_lookup = f"producto__{lookup}"
+                    filtros_corregidos[nuevo_lookup] = value
+                    print(f"🔧 Corrección ventas: {lookup} → {nuevo_lookup}")
+                # Si ya está bien prefijado o es un filtro válido para DetallePedidoModel
+                elif (lookup.startswith('producto__') or 
+                    lookup.startswith('pedido__') or
+                    lookup in ['cantidad', 'precio_unitario', 'subtotal'] or
+                    any(op in lookup for op in DJANGO_LOOKUP_OPERATORS)):
+                    filtros_corregidos[lookup] = value
+                else:
+                    print(f"⚠️  Filtro ignorado para ventas: {lookup} (no válido para DetallePedidoModel)")
+            
+            # Para otros tipos de reporte, mantener la corrección de marcas
+            else:
+                if lookup in ['producto__marca__nombre__icontains', 'marca__nombre__icontains']:
+                    nuevo_lookup = lookup.replace('__icontains', '__iexact')
+                    filtros_corregidos[nuevo_lookup] = value
+                    print(f"🔧 Corrección marca: {lookup} → {nuevo_lookup}")
+                else:
+                    filtros_corregidos[lookup] = value
+        
+        return filtros_corregidos
     def _serializar_datos(self, queryset, tipo_reporte, hubo_agrupacion):
         """Serializa los datos usando los serializers específicos"""
         if hubo_agrupacion:
             # Para datos agrupados, usar values() directamente
-            return list(queryset[:MAX_ROWS])
+            datos = list(queryset)
+            
+            # Mejorar datos agrupados con nombres legibles
+            for item in datos:
+                if 'producto__id' in item and 'producto__nombre' in item:
+                    item['producto_id'] = item.pop('producto__id')
+                    item['producto_nombre'] = item.pop('producto__nombre')
+                if 'pedido__usuario__username' in item:
+                    item['cliente'] = item.pop('pedido__usuario__username')
+                # Agregar más transformaciones según necesites
+                
+            return datos
         
         # Para datos no agrupados, usar serializers
         serializer_class = self._get_serializer_class(tipo_reporte)
         
         if serializer_class:
             # Usar serializer para datos estructurados y seguros
-            serializer = serializer_class(queryset[:MAX_ROWS], many=True)
+            serializer = serializer_class(queryset, many=True)
             return serializer.data
         else:
             # Fallback para tipos sin serializer específico
@@ -399,15 +522,18 @@ class ReporteBaseView(APIView):
                 "pedidos": ['id', 'usuario__username', 'total', 'estado', 'fecha', 'is_active'],
                 "pagos": ['id', 'monto', 'fecha_pago', 'metodo_pago__nombre', 'is_active'],
                 "carritos": ['id', 'usuario__username', 'total', 'fecha', 'is_active'],
-                # Agregar más según necesites
+                "ventas": ['id', 'producto__nombre', 'cantidad', 'precio_unitario', 'subtotal', 'pedido__fecha'],
+                "categorias": ['id', 'nombre', 'descripcion', 'is_active'],
+                "marcas": ['id', 'nombre', 'descripcion', 'is_active'],
+                "planes_pago": ['id', 'usuario__username', 'monto', 'fecha_vencimiento', 'is_active'],
+                "inventario": ['id', 'producto__nombre', 'stock', 'is_active'],
             }
             
             campos = campos_seguros.get(tipo_reporte, [])
             if campos:
-                return list(queryset.values(*campos)[:MAX_ROWS])
+                return list(queryset.values(*campos))
             else:
-                # Último recurso: values() con todos los campos pero limitado
-                return list(queryset.values()[:MAX_ROWS])
+                return list(queryset.values())
 
 # ===================================================================
 # VISTA #1: GenerarReporteView (CON IA)
@@ -421,66 +547,156 @@ class GenerarReporteView(ReporteBaseView):
         now = timezone.now()
         current_date_str = now.strftime('%Y-%m-%d')
 
+        # SCHEMA MEJORADO con relaciones y consultas comunes
         schema_definition = f"""
-Esquema de Modelos para Ecommerce (Moneda: Bs.):
-Fecha actual: {current_date_str}
+    ESQUEMA MEJORADO - ECOMMERCE (Moneda: Bs.)
+    Fecha actual: {current_date_str}
 
-1. Producto (ProductoModel):
-   - Campos: id, nombre, descripcion, modelo, precio_contado, precio_cuota, stock
-   - Campos: garantia_meses, fecha_registro, is_active
-   - Relaciones: marca (-> MarcaModel), subcategoria (-> SubcategoriaModel), subcategoria__categoria (-> CategoriaModel)
+    MODELOS PRINCIPALES:
 
-2. Pedido (PedidoModel):
-   - Campos: id, fecha, total, estado ('pendiente', 'pagando', 'pagado', 'cancelado')
-   - Relaciones: usuario (-> Usuario), forma_pago (-> FormaPagoModel)
+    1. PRODUCTOS (ProductoModel):
+    - Campos: id, nombre, descripcion, modelo, precio_contado, precio_cuota, stock, garantia_meses, fecha_registro, is_active
+    - Relaciones: marca->MarcaModel, subcategoria->SubcategoriaModel->CategoriaModel
 
-3. Pago (PagoModel):
-   - Campos: id, fecha_pago, monto, comprobante, is_active
-   - Relaciones: plan_pago (-> PlanPagoModel), metodo_pago (-> MetodoPagoModel)
+    2. PEDIDOS (PedidoModel):
+    - Campos: id, fecha, total, estado ('pendiente','pagando','pagado','cancelado'), is_active
+    - Relaciones: usuario->Usuario, forma_pago->FormaPagoModel
 
-4. Carrito (CarritoModel):
-   - Campos: id, fecha, total, is_active
-   - Relaciones: usuario (-> Usuario)
+    3. DETALLES_PEDIDO (DetallePedidoModel) - PARA VENTAS:
+    - Campos: id, cantidad, precio_unitario, subtotal, is_active
+    - Relaciones: pedido->PedidoModel, producto->ProductoModel
+    - IMPORTANTE: Para productos más vendidos usar este modelo
 
-5. Cliente (Usuario):
-   - Campos: id, username, first_name, last_name, email, ci, telefono, date_joined, is_active
+    4. CLIENTES (Usuario):
+    - Campos: id, username, first_name, last_name, email, ci, telefono, date_joined, is_active
+    - Relaciones: pedido_set (lista de pedidos del cliente)
 
-6. DetallePedido (DetallePedidoModel):
-   - Campos: id, cantidad, precio_unitario, subtotal
-   - Relaciones: pedido (-> PedidoModel), producto (-> ProductoModel)
+    5. PAGOS (PagoModel):
+    - Campos: id, fecha_pago, monto, comprobante, is_active
+    - Relaciones: plan_pago->PlanPagoModel, metodo_pago->MetodoPagoModel
 
-7. PlanPago (PlanPagoModel):
-   - Campos: id, numero_cuota, monto, fecha_vencimiento, estado ('pendiente', 'pagado')
+    CONSULTAS COMUNES PRE-DEFINIDAS:
 
-Tipos de reporte válidos: {list(VALID_TIPOS)}
+    A) PRODUCTOS MÁS VENDIDOS:
+    - tipo_reporte: "ventas" (DetallePedidoModel)
+    - agrupacion: ["producto__id", "producto__nombre"]
+    - calculos: {{"total_vendido": "Sum('cantidad')", "ingresos_totales": "Sum('subtotal')"}}
+    - orden: ["-total_vendido"]
+    - filtros: {{"pedido__estado": "pagado"}}
 
-IMPORTANTE: Usa solo los campos listados arriba. NO uses campos sensibles como password, is_superuser, etc.
-"""
+    B) CLIENTES CON SUS PEDIDOS:
+    - tipo_reporte: "clientes"
+    - NO usar agrupacion (para datos detallados)
+    - Usar serializer que incluya pedidos relacionados
+
+    C) VENTAS POR CATEGORÍA:
+    - tipo_reporte: "ventas" 
+    - agrupacion: ["producto__subcategoria__categoria__nombre"]
+    - calculos: {{"total_ventas": "Sum('subtotal')", "unidades_vendidas": "Sum('cantidad')"}}
+
+    D) PRODUCTOS CON BAJO STOCK:
+    - tipo_reporte: "productos"
+    - filtros: {{"stock__lt": 10, "is_active": true}}
+    - orden: ["stock"]
+
+    E) PEDIDOS RECIENTES CON DETALLES:
+    - tipo_reporte: "pedidos"
+    - orden: ["-fecha"]
+    - filtros: {{"estado": "pagado"}}
+
+    REGLAS ESTRICTAS:
+    1. Para "más vendidos" SIEMPRE usar tipo_reporte: "ventas" (DetallePedidoModel)
+    2. Para límites usar [:limit] en Python, NO en la consulta SQL
+    3. Para relaciones usar doble guión bajo: "producto__marca__nombre"
+    4. Para cálculos de ventas usar siempre "pedido__estado": "pagado"
+    """
+        
         system_instruction = f"""
-Eres un asistente experto en bases de datos para un Ecommerce (Moneda: Bs.). Fecha actual: {current_date_str}.
-Devuelve ÚNICAMENTE un JSON con esta estructura:
+Eres un experto en bases de datos SQL y Django ORM para Ecommerce. Fecha: {current_date_str}.
+
+ANALIZA la consulta del usuario y DEVUELVE JSON con esta estructura:
 
 {{
   "tipo_reporte": "string", 
   "formato": "pantalla",
   "filtros": {{ "campo__lookup": "valor" }},
-  "agrupacion": ["campo_para_agrupar"], 
-  "calculos": {{ "nombre_del_calculo": "Funcion('campo')" }}, 
-  "orden": ["campo_para_ordenar"], 
-  "error": null | "string"
+  "agrupacion": ["campo"], 
+  "calculos": {{ "nombre": "Funcion('campo')" }}, 
+  "orden": ["campo"],
+  "limite": número,
+  "error": null
 }}
 
-Reglas:
-- "tipo_reporte": uno de los tipos válidos.
-- Usa campos EXACTOS del esquema.
-- Para cálculos: "Sum('precio_contado')", "Count('id')", "Avg('stock')"
-- Para fechas usa formato YYYY-MM-DD
-- "error": solo si la solicitud es imposible
-- NO uses campos sensibles como password, is_superuser, is_staff, last_login
+REGLAS CRÍTICAS DE FILTRADO:
+
+1. PARA MARCAS ESPECÍFICAS usar EXACTAMENTE:
+   - "Samsung" → "producto__marca__nombre__iexact": "Samsung"
+   - "LG" → "producto__marca__nombre__iexact": "LG" 
+   - "Panasonic" → "producto__marca__nombre__iexact": "Panasonic"
+   - NO usar "icontains" para marcas específicas
+
+2. PARA BÚSQUEDAS GENERALES usar:
+   - "productos de refrigeración" → "producto__subcategoria__categoria__nombre__icontains": "refrigeración"
+   - "productos con pantalla" → "producto__nombre__icontains": "pantalla"
+
+3. FILTROS COMUNES EXACTOS:
+   - Solo activos: "is_active": true
+   - Solo pedidos pagados: "pedido__estado__iexact": "pagado"
+   - Stock mayor a cero: "producto__stock__gt": 0
+
+EJEMPLOS CORREGIDOS:
+
+Usuario: "productos samsung más vendidos"
+Respuesta: {{
+  "tipo_reporte": "ventas",
+  "filtros": {{
+    "pedido__estado__iexact": "pagado",
+    "producto__marca__nombre__iexact": "Samsung",
+    "producto__is_active": true
+  }},
+  "agrupacion": ["producto__id", "producto__nombre"],
+  "calculos": {{
+    "unidades_vendidas": "Sum('cantidad')",
+    "ingresos_totales": "Sum('subtotal')"
+  }},
+  "orden": ["-unidades_vendidas"]
+}}
+
+Usuario: "refrigeradores lg"
+Respuesta: {{
+  "tipo_reporte": "productos",
+  "filtros": {{
+    "producto__marca__nombre__iexact": "LG",
+    "subcategoria__nombre__icontains": "refrigerador",
+    "is_active": true
+  }},
+  "orden": ["nombre"]
+}}
+
+Usuario: "top 5 marcas más vendidas"
+Respuesta: {{
+  "tipo_reporte": "ventas",
+  "filtros": {{
+    "pedido__estado__iexact": "pagado"
+  }},
+  "agrupacion": ["producto__marca__nombre"],
+  "calculos": {{
+    "total_ventas": "Sum('subtotal')",
+    "unidades_vendidas": "Sum('cantidad')"
+  }},
+  "orden": ["-total_ventas"],
+  "limite": 5
+}}
+
+IMPORTANTE: Para consultas de marca específica, usar SIEMPRE __iexact no __icontains.
 """
+        
         try:
             model = genai.GenerativeModel(GEMINI_MODEL_NAME)
-            generation_config = genai.types.GenerationConfig(response_mime_type="application/json")
+            generation_config = genai.types.GenerationConfig(
+                response_mime_type="application/json",
+                temperature=0.1  # Menos creatividad, más precisión
+            )
             response = model.generate_content(
                 [system_instruction, schema_definition, user_prompt],
                 generation_config=generation_config
@@ -499,6 +715,10 @@ Reglas:
 
             parsed = json.loads(cleaned)
             interp = _normalize_interpretacion(parsed, default_tipo="productos")
+            
+            # Agregar límite si viene en la respuesta
+            if 'limite' in parsed and isinstance(parsed['limite'], int):
+                interp['limite'] = parsed['limite']
 
             if parsed.get("error") and interp["tipo_reporte"] in VALID_TIPOS:
                 print(f"[Gemini] Warning from LLM: {parsed.get('error')}. Using tolerant mode.")
