@@ -81,24 +81,28 @@ class BusquedaNaturalView(APIView):
         # Usar el texto original como término de búsqueda
         query_dict['search'] = query_text
         
-        # Convertir filtros específicos
+        # Convertir filtros específicos - CORREGIDO
         if filters.get('producto_nombre'):
             query_dict['search'] = filters['producto_nombre']
         
-        if filters.get('marca'):
-            # Aquí necesitarías mapear nombres de marca a IDs
-            marca_id = self._obtener_id_marca(filters['marca'])
+        # CORREGIDO: Verificar que marca no sea None
+        marca = filters.get('marca')
+        if marca:
+            marca_id = self._obtener_id_marca(marca)
             if marca_id:
                 query_dict['marca'] = str(marca_id)
         
-        if filters.get('categoria'):
-            # Mapear nombres de categoría a IDs
-            categoria_id = self._obtener_id_categoria(filters['categoria'])
+        # CORREGIDO: Verificar que categoria no sea None
+        categoria = filters.get('categoria')
+        if categoria:
+            categoria_id = self._obtener_id_categoria(categoria)
             if categoria_id:
                 query_dict['categoria'] = str(categoria_id)
         
-        if filters.get('precio_maximo'):
-            query_dict['max_precio'] = str(filters['precio_maximo'])
+        # CORREGIDO: Verificar que precio_maximo no sea None
+        precio_maximo = filters.get('precio_maximo')
+        if precio_maximo:
+            query_dict['max_precio'] = str(precio_maximo)
         
         # Siempre mostrar productos activos y en stock para búsquedas naturales
         query_dict['activos'] = 'true'
@@ -110,12 +114,34 @@ class BusquedaNaturalView(APIView):
         """Convierte nombre de marca a ID"""
         from .models import MarcaModel
         try:
+            # CORREGIDO: Verificar que nombre_marca no sea None
+            if not nombre_marca:
+                return None
+                
             marca = MarcaModel.objects.filter(
                 nombre__iexact=nombre_marca, 
                 is_active=True
             ).first()
             return marca.id if marca else None
-        except:
+        except Exception as e:
+            print(f"❌ Error obteniendo ID de marca '{nombre_marca}': {e}")
+            return None
+
+    def _obtener_id_categoria(self, nombre_categoria):
+        """Convierte nombre de categoría a ID"""
+        from .models import CategoriaModel
+        try:
+            # CORREGIDO: Verificar que nombre_categoria no sea None
+            if not nombre_categoria:
+                return None
+                
+            categoria = CategoriaModel.objects.filter(
+                nombre__iexact=nombre_categoria,
+                is_active=True
+            ).first()
+            return categoria.id if categoria else None
+        except Exception as e:
+            print(f"❌ Error obteniendo ID de categoría '{nombre_categoria}': {e}")
             return None
     
     def _obtener_id_categoria(self, nombre_categoria):
@@ -243,29 +269,33 @@ class BusquedaNaturalView(APIView):
         """Busca productos con criterios específicos para agregar al carrito"""
         q_objects = Q(is_active=True, stock__gt=0)
         
-        producto_nombre = filters.get('producto_nombre', '').lower()
-        marca = filters.get('marca', '').lower()
+        # CORREGIDO: Verificar que no sean None antes de usar .lower()
+        producto_nombre = filters.get('producto_nombre')
+        marca = filters.get('marca')
         caracteristicas = filters.get('caracteristicas', [])
         
         print(f"🔍 Buscando: producto='{producto_nombre}', marca='{marca}', caracteristicas={caracteristicas}")
         
-        # Búsqueda por nombre de producto
-        if producto_nombre:
+        # Búsqueda por nombre de producto (CORREGIDO)
+        if producto_nombre and isinstance(producto_nombre, str):
+            producto_nombre_lower = producto_nombre.lower()
             q_objects &= (
-                Q(nombre__icontains=producto_nombre) |
-                Q(descripcion__icontains=producto_nombre) |
-                Q(subcategoria__nombre__icontains=producto_nombre)
+                Q(nombre__icontains=producto_nombre_lower) |
+                Q(descripcion__icontains=producto_nombre_lower) |
+                Q(subcategoria__nombre__icontains=producto_nombre_lower)
             )
         
-        # Búsqueda por marca (EXACTA)
-        if marca:
-            q_objects &= Q(marca__nombre__iexact=marca)
+        # Búsqueda por marca (EXACTA) - CORREGIDO
+        if marca and isinstance(marca, str):
+            marca_lower = marca.lower()
+            q_objects &= Q(marca__nombre__iexact=marca_lower)
         
-        # Búsqueda por características
+        # Búsqueda por características - CORREGIDO
         if caracteristicas:
             for carac in caracteristicas:
                 if isinstance(carac, str):
-                    q_objects &= Q(descripcion__icontains=carac.lower())
+                    carac_lower = carac.lower()
+                    q_objects &= Q(descripcion__icontains=carac_lower)
         
         productos = ProductoModel.objects.filter(q_objects).select_related(
             'marca', 'subcategoria', 'subcategoria__categoria'
@@ -273,8 +303,11 @@ class BusquedaNaturalView(APIView):
         
         print(f"✅ Encontrados {productos.count()} productos potenciales")
         
-        # Ordenar por mejor coincidencia
-        if marca:
+        # Ordenar por mejor coincidencia - CORREGIDO
+        if marca and isinstance(marca, str):
             productos = productos.order_by('-marca__nombre')
+        else:
+            # Ordenar por nombre si no hay marca específica
+            productos = productos.order_by('nombre')
         
         return productos[:5]  # Máximo 5 productos más relevantes
