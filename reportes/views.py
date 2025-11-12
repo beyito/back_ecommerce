@@ -23,7 +23,7 @@ from django.utils import timezone
 from usuario.models import Usuario, Grupo
 from producto.models import ProductoModel, CategoriaModel, SubcategoriaModel, MarcaModel, CambioPrecioModel
 from venta.models import CarritoModel, DetalleCarritoModel, PedidoModel, DetallePedidoModel, FormaPagoModel, PlanPagoModel, PagoModel, MetodoPagoModel
-
+from .serializers import UsuarioReporteSerializer, CarritoReporteSerializer, PedidoReporteSerializer, DetallePedidoReporteSerializer, PagoReporteSerializer, PlanPagoReporteSerializer, ProductoReporteSerializer, CategoriaReporteSerializer, MarcaReporteSerializer
 # from .permissions import IsAdminOrStaff
 from .generators import generar_reporte_pdf, generar_reporte_excel
 
@@ -224,6 +224,47 @@ class ReporteBaseView(APIView):
         except (ValueError, TypeError) as e:
             raise ValueError(f"Valor '{value}' inválido para filtro '{lookup}': {e}")
 
+    def _get_serializer_class(self, tipo_reporte):
+        """Obtiene el serializer class para el tipo de reporte"""
+        serializer_map = {
+            "productos": ProductoReporteSerializer,
+            "categorias": CategoriaReporteSerializer,
+            "marcas": MarcaReporteSerializer,
+            "carritos": CarritoReporteSerializer,
+            "pedidos": PedidoReporteSerializer,
+            "pagos": PagoReporteSerializer,
+            "clientes": UsuarioReporteSerializer,
+            "ventas": DetallePedidoReporteSerializer,
+            "inventario": ProductoReporteSerializer,  # Reutiliza el de productos
+            "planes_pago": PlanPagoReporteSerializer,
+        }
+        return serializer_map.get(tipo_reporte)
+
+    def _get_model_and_queryset(self, tipo_reporte):
+        """Obtiene el modelo y queryset base para el tipo de reporte"""
+        if tipo_reporte == "productos":
+            return ProductoModel, ProductoModel.objects.select_related('marca', 'subcategoria', 'subcategoria__categoria')
+        elif tipo_reporte == "categorias":
+            return CategoriaModel, CategoriaModel.objects.all()
+        elif tipo_reporte == "marcas":
+            return MarcaModel, MarcaModel.objects.all()
+        elif tipo_reporte == "carritos":
+            return CarritoModel, CarritoModel.objects.select_related('usuario')
+        elif tipo_reporte == "pedidos":
+            return PedidoModel, PedidoModel.objects.select_related('usuario', 'forma_pago')
+        elif tipo_reporte == "pagos":
+            return PagoModel, PagoModel.objects.select_related('plan_pago', 'metodo_pago')
+        elif tipo_reporte == "clientes":
+            return Usuario, Usuario.objects.all()
+        elif tipo_reporte == "ventas":
+            return DetallePedidoModel, DetallePedidoModel.objects.select_related('pedido', 'producto')
+        elif tipo_reporte == "inventario":
+            return ProductoModel, ProductoModel.objects.select_related('marca', 'subcategoria')
+        elif tipo_reporte == "planes_pago":
+            return PlanPagoModel, PlanPagoModel.objects.select_related('pedido')
+        else:
+            raise ValueError(f"Tipo de reporte '{tipo_reporte}' no soportado.")
+
     def _build_queryset(self, interpretacion):
         """Construye el queryset según la interpretación"""
         tipo = interpretacion.get("tipo_reporte")
@@ -232,42 +273,8 @@ class ReporteBaseView(APIView):
         calculos_dict = interpretacion.get("calculos", {})
         orden_list = interpretacion.get("orden", [])
 
-        ModelClass = None
-        base_queryset = None
-
-        # Mapeo de tipos a modelos
-        if tipo == "productos":
-            ModelClass = ProductoModel
-            base_queryset = ProductoModel.objects.select_related('marca', 'subcategoria', 'subcategoria__categoria')
-        elif tipo == "categorias":
-            ModelClass = CategoriaModel
-            base_queryset = CategoriaModel.objects.all()
-        elif tipo == "marcas":
-            ModelClass = MarcaModel
-            base_queryset = MarcaModel.objects.all()
-        elif tipo == "carritos":
-            ModelClass = CarritoModel
-            base_queryset = CarritoModel.objects.select_related('usuario')
-        elif tipo == "pedidos":
-            ModelClass = PedidoModel
-            base_queryset = PedidoModel.objects.select_related('usuario', 'forma_pago')
-        elif tipo == "pagos":
-            ModelClass = PagoModel
-            base_queryset = PagoModel.objects.select_related('plan_pago', 'metodo_pago')
-        elif tipo == "clientes":
-            ModelClass = Usuario
-            base_queryset = Usuario.objects.all()
-        elif tipo == "ventas":
-            ModelClass = DetallePedidoModel
-            base_queryset = DetallePedidoModel.objects.select_related('pedido', 'producto')
-        elif tipo == "inventario":
-            ModelClass = ProductoModel
-            base_queryset = ProductoModel.objects.select_related('marca', 'subcategoria')
-        elif tipo == "planes_pago":
-            ModelClass = PlanPagoModel
-            base_queryset = PlanPagoModel.objects.select_related('pedido')
-        else:
-            raise ValueError(f"Tipo de reporte '{tipo}' no soportado.")
+        # Obtener modelo y queryset base
+        ModelClass, base_queryset = self._get_model_and_queryset(tipo)
 
         # Aplicar filtros
         q_filtros = Q()
@@ -371,6 +378,37 @@ class ReporteBaseView(APIView):
 
         return queryset, hubo_agrupacion
 
+    def _serializar_datos(self, queryset, tipo_reporte, hubo_agrupacion):
+        """Serializa los datos usando los serializers específicos"""
+        if hubo_agrupacion:
+            # Para datos agrupados, usar values() directamente
+            return list(queryset[:MAX_ROWS])
+        
+        # Para datos no agrupados, usar serializers
+        serializer_class = self._get_serializer_class(tipo_reporte)
+        
+        if serializer_class:
+            # Usar serializer para datos estructurados y seguros
+            serializer = serializer_class(queryset[:MAX_ROWS], many=True)
+            return serializer.data
+        else:
+            # Fallback para tipos sin serializer específico
+            campos_seguros = {
+                "productos": ['id', 'nombre', 'marca__nombre', 'precio_contado', 'stock', 'is_active'],
+                "clientes": ['id', 'username', 'first_name', 'last_name', 'email', 'ci', 'telefono', 'date_joined', 'is_active'],
+                "pedidos": ['id', 'usuario__username', 'total', 'estado', 'fecha', 'is_active'],
+                "pagos": ['id', 'monto', 'fecha_pago', 'metodo_pago__nombre', 'is_active'],
+                "carritos": ['id', 'usuario__username', 'total', 'fecha', 'is_active'],
+                # Agregar más según necesites
+            }
+            
+            campos = campos_seguros.get(tipo_reporte, [])
+            if campos:
+                return list(queryset.values(*campos)[:MAX_ROWS])
+            else:
+                # Último recurso: values() con todos los campos pero limitado
+                return list(queryset.values()[:MAX_ROWS])
+
 # ===================================================================
 # VISTA #1: GenerarReporteView (CON IA)
 # ===================================================================
@@ -415,6 +453,8 @@ Fecha actual: {current_date_str}
    - Campos: id, numero_cuota, monto, fecha_vencimiento, estado ('pendiente', 'pagado')
 
 Tipos de reporte válidos: {list(VALID_TIPOS)}
+
+IMPORTANTE: Usa solo los campos listados arriba. NO uses campos sensibles como password, is_superuser, etc.
 """
         system_instruction = f"""
 Eres un asistente experto en bases de datos para un Ecommerce (Moneda: Bs.). Fecha actual: {current_date_str}.
@@ -436,6 +476,7 @@ Reglas:
 - Para cálculos: "Sum('precio_contado')", "Count('id')", "Avg('stock')"
 - Para fechas usa formato YYYY-MM-DD
 - "error": solo si la solicitud es imposible
+- NO uses campos sensibles como password, is_superuser, is_staff, last_login
 """
         try:
             model = genai.GenerativeModel(GEMINI_MODEL_NAME)
@@ -493,41 +534,9 @@ Reglas:
 
         try:
             tipo_reporte = interpretacion.get("tipo_reporte")
-            if hubo_agrupacion:
-                data_para_reporte = list(queryset[:MAX_ROWS])
-            else:
-                # Campos por defecto para cada tipo
-                campos_por_tipo = {
-                    "productos": ['id', 'nombre', 'marca__nombre', 'precio_contado', 'stock', 'is_active'],
-                    "pedidos": ['id', 'usuario__username', 'total', 'estado', 'fecha'],
-                    "pagos": ['id', 'monto', 'fecha_pago', 'metodo_pago__nombre', 'plan_pago__numero_cuota'],
-                    "carritos": ['id', 'usuario__username', 'total', 'fecha', 'is_active'],
-                    "clientes": ['id', 'username', 'email', 'ci', 'telefono', 'date_joined'],
-                    "categorias": ['id', 'nombre', 'descripcion', 'is_active'],
-                    "marcas": ['id', 'nombre', 'is_active'],
-                    "ventas": ['id', 'producto__nombre', 'cantidad', 'precio_unitario', 'subtotal'],
-                    "inventario": ['id', 'nombre', 'marca__nombre', 'stock', 'precio_contado'],
-                    "planes_pago": ['id', 'numero_cuota', 'monto', 'fecha_vencimiento', 'estado'],
-                }
-                
-                campos = campos_por_tipo.get(tipo_reporte, [])
-                if campos:
-                    valid_fields = []
-                    ModelClass = None
-                    if tipo_reporte == "productos": ModelClass = ProductoModel
-                    elif tipo_reporte == "pedidos": ModelClass = PedidoModel
-                    # ... otros mapeos
-                    
-                    for f in campos:
-                        try:
-                            if ModelClass:
-                                self._validate_and_convert_value(ModelClass, f, None)
-                            valid_fields.append(f)
-                        except (FieldDoesNotExist, ValueError):
-                            print(f"[WARN] Campo por defecto no encontrado: {f}")
-                    data_para_reporte = list(queryset.values(*valid_fields)[:MAX_ROWS])
-                else:
-                    data_para_reporte = list(queryset.values()[:MAX_ROWS])
+            
+            # ✅ USAR EL NUEVO MÉTODO DE SERIALIZACIÓN
+            data_para_reporte = self._serializar_datos(queryset, tipo_reporte, hubo_agrupacion)
 
             json_output = json.dumps(data_para_reporte, default=_json_converter)
             return HttpResponse(json_output, content_type='application/json', status=status.HTTP_200_OK)
@@ -565,10 +574,10 @@ class ReporteDirectoView(ReporteBaseView):
             return Response({"error": "Error interno al procesar."}, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
 
         try:
-            if hubo_agrupacion:
-                data_para_reporte = list(queryset[:MAX_ROWS])
-            else:
-                data_para_reporte = list(queryset.values()[:MAX_ROWS])
+            tipo_reporte = interpretacion.get("tipo_reporte")
+            
+            # ✅ USAR EL NUEVO MÉTODO DE SERIALIZACIÓN
+            data_para_reporte = self._serializar_datos(queryset, tipo_reporte, hubo_agrupacion)
 
             json_output = json.dumps(data_para_reporte, default=_json_converter)
             return HttpResponse(json_output, content_type='application/json', status=status.HTTP_200_OK)
@@ -591,6 +600,15 @@ class ReporteDirectoView(ReporteBaseView):
                 filtros_out["is_active"] = filtros_in["estado"] == "activo"
             elif tipo == "pedidos":
                 filtros_out["estado__exact"] = filtros_in["estado"]
+            elif tipo == "pagos":
+                # Para pagos, el estado está en plan_pago
+                filtros_out["plan_pago__estado__exact"] = filtros_in["estado"]
+            elif tipo == "carritos":
+                filtros_out["is_active"] = filtros_in["estado"] == "activo"
+            elif tipo == "clientes":
+                filtros_out["is_active"] = filtros_in["estado"] == "activo"
+            elif tipo == "planes_pago":
+                filtros_out["estado__exact"] = filtros_in["estado"]
 
         # Fechas
         fecha_desde = filtros_in.get("fechaDesde")
@@ -603,6 +621,7 @@ class ReporteDirectoView(ReporteBaseView):
             "carritos": "fecha",
             "clientes": "date_joined",
             "planes_pago": "fecha_vencimiento",
+            "ventas": "pedido__fecha",
         }
         date_field = DATE_FIELD_MAP.get(tipo, "id")
 
@@ -613,8 +632,8 @@ class ReporteDirectoView(ReporteBaseView):
         elif fecha_hasta:
             filtros_out[f"{date_field}__lte"] = fecha_hasta
 
-        # Stock (para productos)
-        if tipo == "productos" and filtros_in.get("stockOp"):
+        # Stock (para productos e inventario)
+        if tipo in ["productos", "inventario"] and filtros_in.get("stockOp"):
             stock_valor = filtros_in.get("stockValor")
             if stock_valor is not None:
                 filtros_out[f"stock__{filtros_in['stockOp']}"] = stock_valor
@@ -624,6 +643,31 @@ class ReporteDirectoView(ReporteBaseView):
             precio_valor = filtros_in.get("precioValor")
             if precio_valor is not None:
                 filtros_out[f"precio_contado__{filtros_in['precioOp']}"] = precio_valor
+
+        # Monto (para pedidos)
+        if tipo == "pedidos" and filtros_in.get("montoOp"):
+            monto_valor = filtros_in.get("montoValor")
+            if monto_valor is not None:
+                filtros_out[f"total__{filtros_in['montoOp']}"] = monto_valor
+
+        # Monto (para pagos)
+        if tipo == "pagos" and filtros_in.get("montoOp"):
+            monto_valor = filtros_in.get("montoValor")
+            if monto_valor is not None:
+                filtros_out[f"monto__{filtros_in['montoOp']}"] = monto_valor
+
+        # Monto (para planes_pago)
+        if tipo == "planes_pago" and filtros_in.get("montoOp"):
+            monto_valor = filtros_in.get("montoValor")
+            if monto_valor is not None:
+                filtros_out[f"monto__{filtros_in['montoOp']}"] = monto_valor
+
+        # Búsqueda por texto (para productos y clientes)
+        if filtros_in.get("busqueda"):
+            if tipo == "productos":
+                filtros_out["nombre__icontains"] = filtros_in["busqueda"]
+            elif tipo == "clientes":
+                filtros_out["username__icontains"] = filtros_in["busqueda"]
 
         interpretacion = {
             "tipo_reporte": tipo,
