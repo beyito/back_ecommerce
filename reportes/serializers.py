@@ -96,3 +96,29 @@ class VentasAgrupadasSerializer(serializers.Serializer):
     unidades_vendidas = serializers.IntegerField(required=False)
     ingresos_totales = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)
     promedio_venta = serializers.DecimalField(max_digits=10, decimal_places=2, required=False)
+
+class PedidoClienteSerializer(serializers.ModelSerializer):
+    detalles = serializers.SerializerMethodField()
+    estado_display = serializers.CharField(source='get_estado_display', read_only=True)
+    
+    class Meta:
+        model = PedidoModel
+        fields = [
+            'id', 'fecha', 'total', 'estado', 'estado_display', 'detalles'
+        ]
+    
+    def get_detalles(self, obj):
+        detalles = DetallePedidoModel.objects.filter(pedido=obj)
+        return DetallePedidoClienteSerializer(detalles, many=True).data
+
+class DetallePedidoClienteSerializer(serializers.ModelSerializer):
+    producto_nombre = serializers.CharField(source='producto.nombre', read_only=True)
+    producto_imagen = serializers.CharField(source='producto.imagen_principal', read_only=True)
+    producto_marca = serializers.CharField(source='producto.marca.nombre', read_only=True)
+    
+    class Meta:
+        model = DetallePedidoModel
+        fields = [
+            'id', 'producto_nombre', 'producto_imagen', 'producto_marca',
+            'cantidad', 'precio_unitario', 'subtotal'
+        ]
