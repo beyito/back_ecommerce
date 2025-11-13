@@ -203,3 +203,112 @@ def generar_reporte_pdf(data, interpretacion):
 
     doc.build(story)
     return response
+
+# En tu generators.py - Mejora la función generar_reporte_pdf
+
+# En tu generators.py - CORREGIDO
+
+def generar_reporte_cliente_pdf(data, interpretacion):
+    """
+    Genera un archivo PDF en memoria para ecommerce - CORREGIDO
+    """
+    prompt_titulo = interpretacion.get('prompt', 'Reporte Ecommerce')
+    tipo_reporte = interpretacion.get('tipo_reporte', '')
+    total_resultados = interpretacion.get('total_resultados', len(data))
+    fecha_consulta = interpretacion.get('fecha_consulta', datetime.date.today())
+
+    response = HttpResponse(content_type='application/pdf')
+    response['Content-Disposition'] = f'attachment; filename="reporte_{datetime.date.today()}.pdf"'
+
+    # Usar página vertical para mejor legibilidad
+    doc = SimpleDocTemplate(response, pagesize=letter, 
+                          topMargin=0.5*inch, bottomMargin=0.5*inch,
+                          leftMargin=0.5*inch, rightMargin=0.5*inch)
+    story = []
+    styles = getSampleStyleSheet()
+
+    if not data:
+        story.append(Paragraph("No se encontraron datos para este reporte.", styles['Normal']))
+        doc.build(story)
+        return response
+
+    # --- Título y información del reporte ---
+    title_style = styles['Heading1']
+    title_style.alignment = 1  # Centrado
+    story.append(Paragraph("Reporte de Compras", title_style))
+    story.append(Spacer(1, 0.1*inch))
+    
+    # Información del reporte
+    info_style = styles['Normal']
+    info_style.alignment = 1
+    story.append(Paragraph(f"<b>Consulta:</b> {prompt_titulo}", info_style))
+    story.append(Paragraph(f"<b>Tipo:</b> {tipo_reporte.title() if tipo_reporte else 'General'}", info_style))
+    story.append(Paragraph(f"<b>Total de registros:</b> {total_resultados}", info_style))
+    story.append(Paragraph(f"<b>Fecha de generación:</b> {fecha_consulta}", info_style))
+    story.append(Spacer(1, 0.2*inch))
+
+    # --- Preparar datos de tabla ---
+    headers = list(data[0].keys()) if data else []
+    clean_headers = [_formatear_encabezado(h) for h in headers]
+    
+    table_data = [clean_headers] + [
+        [_limpiar_valor(row.get(header)) for header in headers] for row in data
+    ]
+
+    # --- CORRECCIÓN: Calcular anchos de columna apropiados ---
+    if headers:
+        # Calcular anchos basados en el contenido
+        col_widths = []
+        for i, header in enumerate(headers):
+            # Ancho mínimo basado en el encabezado
+            header_width = len(clean_headers[i]) * 7  # Aproximadamente 7 puntos por carácter
+            # Verificar el contenido más largo en esta columna
+            max_content_width = header_width
+            for row in data:
+                content = str(_limpiar_valor(row.get(header, '')))
+                content_width = len(content) * 6  # Aproximadamente 6 puntos por carácter
+                if content_width > max_content_width:
+                    max_content_width = content_width
+            
+            # Limitar el ancho máximo a 200 puntos
+            col_width = min(max_content_width + 10, 200)
+            col_widths.append(col_width)
+    else:
+        col_widths = None
+
+    # --- Crear tabla con anchos calculados ---
+    t = Table(table_data, repeatRows=1, colWidths=col_widths)
+
+    # --- Estilo de tabla mejorado ---
+    style = TableStyle([
+        ('BACKGROUND', (0, 0), (-1, 0), colors.HexColor('#2E86AB')),
+        ('TEXTCOLOR', (0, 0), (-1, 0), colors.whitesmoke),
+        ('ALIGN', (0, 0), (-1, 0), 'CENTER'),
+        ('ALIGN', (0, 1), (-1, -1), 'LEFT'),
+        ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
+        ('FONTNAME', (0, 0), (-1, 0), 'Helvetica-Bold'),
+        ('FONTSIZE', (0, 0), (-1, 0), 9),
+        ('BOTTOMPADDING', (0, 0), (-1, 0), 8),
+        ('FONTSIZE', (0, 1), (-1, -1), 8),
+        ('GRID', (0, 0), (-1, -1), 0.5, colors.grey),
+        ('ROWBACKGROUNDS', (0, 1), (-1, -1), [colors.white, colors.HexColor('#f8f9fa')]),
+    ])
+    
+    # Ajustar fuentes para datos
+    if headers:
+        for i in range(len(headers)):
+            style.add('FONTSIZE', (i, 1), (i, -1), 8)
+    
+    t.setStyle(style)
+    story.append(t)
+
+    # --- Pie de página ---
+    story.append(Spacer(1, 0.2*inch))
+    footer_style = styles['Normal']
+    footer_style.alignment = 1
+    footer_style.fontSize = 8
+    footer_style.textColor = colors.grey
+    story.append(Paragraph("Sistema Ecommerce - Reporte generado automáticamente", footer_style))
+
+    doc.build(story)
+    return response

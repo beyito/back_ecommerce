@@ -104,8 +104,7 @@ class PedidoClienteSerializer(serializers.ModelSerializer):
     class Meta:
         model = PedidoModel
         fields = [
-            'id', 'fecha', 'total', 'estado', 'estado_display', 
-            'direccion_entrega', 'detalles'
+            'id', 'fecha', 'total', 'estado', 'estado_display', 'detalles'
         ]
     
     def get_detalles(self, obj):

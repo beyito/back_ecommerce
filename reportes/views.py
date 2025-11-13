@@ -1117,7 +1117,7 @@ def _obtener_datos_cliente(cliente):
         return {}
 
 def _build_queryset(interpretacion):
-    """Construye el queryset basado en la interpretación"""
+    """Construye el queryset basado en la interpretación - MEJORADO para tus modelos"""
     from django.db.models import Count, Sum
     
     tipo_reporte = interpretacion.get("tipo_reporte")
@@ -1129,8 +1129,16 @@ def _build_queryset(interpretacion):
     
     hubo_agrupacion = bool(agrupacion)
     
+    print(f"[DEBUG] Construyendo queryset - Tipo: {tipo_reporte}")
+    print(f"[DEBUG] Filtros aplicados: {filtros}")
+    
     try:
         if tipo_reporte == "pedidos":
+            # Validar que el filtro de seguridad esté presente
+            if "usuario__id" not in filtros:
+                print("[SEGURIDAD] Faltaba filtro usuario__id, agregando...")
+                filtros["usuario__id"] = interpretacion.get("filtros", {}).get("usuario__id", "unknown")
+            
             queryset = PedidoModel.objects.filter(**filtros)
             
             if agrupacion:
@@ -1152,6 +1160,11 @@ def _build_queryset(interpretacion):
                 queryset = queryset[:limite]
                 
         elif tipo_reporte == "ventas":
+            # Validar que el filtro de seguridad esté presente
+            if "pedido__usuario__id" not in filtros:
+                print("[SEGURIDAD] Faltaba filtro pedido__usuario__id, agregando...")
+                filtros["pedido__usuario__id"] = interpretacion.get("filtros", {}).get("pedido__usuario__id", "unknown")
+            
             queryset = DetallePedidoModel.objects.filter(**filtros)
             
             if agrupacion:
@@ -1175,12 +1188,26 @@ def _build_queryset(interpretacion):
         else:
             queryset = PedidoModel.objects.none()
             
+        print(f"[DEBUG] Queryset exitoso: {queryset.count()} registros")
         return queryset, hubo_agrupacion
         
     except Exception as e:
         print(f"[ERROR] Build queryset: {e}")
-        return PedidoModel.objects.none(), False
-
+        print(f"[DEBUG] Filtros problemáticos: {filtros}")
+        
+        # FALLBACK SEGURO: retornar solo con filtros básicos de seguridad
+        try:
+            if tipo_reporte == "pedidos":
+                queryset = PedidoModel.objects.filter(usuario__id=datos_cliente.get('id'))
+            elif tipo_reporte == "ventas":
+                queryset = DetallePedidoModel.objects.filter(pedido__usuario__id=datos_cliente.get('id'))
+            else:
+                queryset = PedidoModel.objects.none()
+            return queryset, False
+        except Exception as fallback_error:
+            print(f"[ERROR] Fallback también falló: {fallback_error}")
+            return PedidoModel.objects.none(), False
+          
 def _serializar_datos(queryset, tipo_reporte, hubo_agrupacion):
     """Serializa los datos según el tipo de reporte"""
     if hubo_agrupacion:
@@ -1194,8 +1221,12 @@ def _serializar_datos(queryset, tipo_reporte, hubo_agrupacion):
     
     return []
 
+# En tu views.py, corrige la función _call_gemini_cliente
+
+# En tu views.py - FUNCIONES CORREGIDAS
+
 def _call_gemini_cliente(user_prompt: str, datos_cliente: dict):
-    """Gemini especializado para consultas del cliente"""
+    """Gemini especializado para consultas del cliente - CORREGIDO para tus modelos"""
     if not GEMINI_CONFIGURED:
         return _naive_interpret_cliente(user_prompt, datos_cliente)
 
@@ -1209,24 +1240,33 @@ ESQUEMA CLIENTE - MIS PEDIDOS Y COMPRAS
 Fecha actual: {current_date_str}
 
 DATOS DEL CLIENTE ACTUAL:
+- ID: {datos_cliente_limpios.get('id', 'current_user')}
 - Nombre: {datos_cliente_limpios.get('nombre_cliente', 'Cliente')}
-- Total de pedidos: {datos_cliente_limpios.get('total_pedidos', 0)}
-- Total gastado: S/. {datos_cliente_limpios.get('total_gastado', 0):.2f}
-- Promedio por pedido: S/. {datos_cliente_limpios.get('promedio_por_pedido', 0):.2f}
-- Miembro desde: {datos_cliente_limpios.get('miembro_desde', 'N/A')}
-- Meses como cliente: {datos_cliente_limpios.get('meses_como_cliente', 0)}
 
-PRODUCTOS MÁS COMPRADOS:
-{json.dumps(datos_cliente_limpios.get('productos_frecuentes', []), indent=4, ensure_ascii=False)}
+ESTRUCTURA EXACTA DE TU BASE DE DATOS:
 
-ÚLTIMO PEDIDO:
-{json.dumps(datos_cliente_limpios.get('ultimo_pedido', {}), indent=4, ensure_ascii=False)}
+MODELOS DISPONIBLES:
+1. PedidoModel (PEDIDOS) - Campos: id, usuario, carrito, forma_pago, fecha, total, estado
+2. DetallePedidoModel (DETALLES) - Campos: id, pedido, producto, cantidad, precio_unitario, subtotal
 
-PEDIDOS POR ESTADO:
-{json.dumps(datos_cliente_limpios.get('pedidos_por_estado', []), indent=4, ensure_ascii=False)}
+FILTROS CORRECTOS Y OBLIGATORIOS:
+- Para PedidoModel: SIEMPRE usar "usuario__id": {datos_cliente_limpios.get('id', 'current_user')}
+- Para DetallePedidoModel: SIEMPRE usar "pedido__usuario__id": {datos_cliente_limpios.get('id', 'current_user')}
 
-TENDENCIA MENSUAL (Últimos 6 meses):
-{json.dumps(datos_cliente_limpios.get('tendencia_mensual', []), indent=4, ensure_ascii=False)}
+ESTADOS VÁLIDOS para PedidoModel:
+- 'pendiente', 'pagando', 'pagado', 'cancelado'
+
+CAMPOS PARA FILTRAR PEDIDOS:
+- fecha, total, estado, forma_pago__nombre
+- Ejemplos: "fecha__gte", "total__gte", "estado__exact", "forma_pago__nombre__icontains"
+
+CAMPOS PARA FILTRAR DETALLES/PRODUCTOS:
+- producto__nombre, cantidad, precio_unitario, subtotal
+- producto__marca__nombre, producto__subcategoria__nombre
+
+NUNCA USAR ESTOS FILTROS (NO EXISTEN):
+- usuario__nombre, cliente__nombre, cliente__id, direccion_entrega, usuario__username
+No hay dirección de entrega en estos modelos.
 """
 
     system_instruction = f"""
@@ -1236,9 +1276,9 @@ Fecha actual: {current_date_str}
 ANALIZA la consulta del cliente y DEVUELVE JSON con esta estructura:
 
 {{
-  "tipo_reporte": "string",
+  "tipo_reporte": "pedidos" o "ventas",
   "formato": "pantalla", 
-  "filtros": {{ "campo__lookup": "valor" }},
+  "filtros": {{ "campo": "valor" }},
   "agrupacion": ["campo"],
   "calculos": {{ "nombre": "Funcion('campo')" }},
   "orden": ["campo"],
@@ -1246,10 +1286,59 @@ ANALIZA la consulta del cliente y DEVUELVE JSON con esta estructura:
   "error": null
 }}
 
-REGLAS CRÍTICAS PARA CLIENTES:
-1. SEGURIDAD: Todos los reportes deben filtrar por el usuario actual
-2. TIPOS DE REPORTE PERMITIDOS: "pedidos", "ventas"
-3. Usar siempre filtros de seguridad
+REGLAS ABSOLUTAS:
+
+1. SEGURIDAD: Todos los filtros deben incluir el ID del usuario actual
+   - Para "pedidos": "usuario__id": {datos_cliente_limpios.get('id', 'current_user')}
+   - Para "ventas": "pedido__usuario__id": {datos_cliente_limpios.get('id', 'current_user')}
+
+2. SOLO USAR CAMPOS QUE EXISTEN:
+   - PedidoModel: usuario, fecha, total, estado, forma_pago
+   - DetallePedidoModel: pedido, producto, cantidad, precio_unitario, subtotal
+
+3. EJEMPLOS CORRECTOS:
+
+Usuario: "mis pedidos más caros"
+Respuesta: {{
+  "tipo_reporte": "pedidos",
+  "filtros": {{ "usuario__id": {datos_cliente_limpios.get('id', 'current_user')} }},
+  "orden": ["-total"],
+  "limite": 5
+}}
+
+Usuario: "productos que más compro"
+Respuesta: {{
+  "tipo_reporte": "ventas",
+  "filtros": {{ "pedido__usuario__id": {datos_cliente_limpios.get('id', 'current_user')} }},
+  "agrupacion": ["producto__nombre", "producto__marca__nombre"],
+  "calculos": {{
+    "veces_comprado": "Count('id')",
+    "total_unidades": "Sum('cantidad')",
+    "total_gastado": "Sum('subtotal')"
+  }},
+  "orden": ["-veces_comprado"]
+}}
+
+Usuario: "pedidos pendientes"
+Respuesta: {{
+  "tipo_reporte": "pedidos",
+  "filtros": {{ 
+    "usuario__id": {datos_cliente_limpios.get('id', 'current_user')},
+    "estado": "pendiente"
+  }},
+  "orden": ["-fecha"]
+}}
+
+Usuario: "mis últimos pedidos"
+Respuesta: {{
+  "tipo_reporte": "pedidos",
+  "filtros": {{ "usuario__id": {datos_cliente_limpios.get('id', 'current_user')} }},
+  "orden": ["-fecha"],
+  "limite": 10
+}}
+
+IMPORTANTE: Si el usuario pregunta sobre productos, compras frecuentes, o qué compra más, usar "ventas".
+Si pregunta sobre pedidos, órdenes, compras, usar "pedidos".
 """
 
     try:
@@ -1278,14 +1367,8 @@ REGLAS CRÍTICAS PARA CLIENTES:
         parsed = json.loads(cleaned)
         interp = _normalize_interpretacion(parsed, default_tipo="pedidos")
 
-        # AGREGAR FILTROS DE SEGURIDAD AUTOMÁTICAMENTE
-        if interp["tipo_reporte"] == "pedidos":
-            interp["filtros"]["usuario__id"] = datos_cliente.get('id', 'current_user')
-        elif interp["tipo_reporte"] == "ventas":
-            interp["filtros"]["pedido__usuario__id"] = datos_cliente.get('id', 'current_user')
-
-        if 'limite' not in parsed or not isinstance(parsed['limite'], int):
-            interp['limite'] = 20
+        # CORRECCIÓN AUTOMÁTICA DE FILTROS
+        interp = _corregir_filtros_automaticamente(interp, datos_cliente)
 
         return interp
 
@@ -1293,40 +1376,112 @@ REGLAS CRÍTICAS PARA CLIENTES:
         print(f"[ERROR] Gemini cliente failed -> falling back to naive. Reason: {e}")
         return _naive_interpret_cliente(user_prompt, datos_cliente)
 
+def _corregir_filtros_automaticamente(interpretacion, datos_cliente):
+    """Corrige automáticamente los filtros para que sean compatibles con tus modelos"""
+    filtros = interpretacion.get("filtros", {})
+    tipo_reporte = interpretacion.get("tipo_reporte")
+    
+    # LISTA DE FILTROS PROHIBIDOS (que no existen en tus modelos)
+    filtros_prohibidos = [
+        'usuario__nombre', 'usuario__nombre__exact', 'usuario__nombre__icontains',
+        'cliente', 'cliente__id', 'cliente__nombre', 'cliente__nombre__exact',
+        'direccion_entrega', 'usuario__username', 'usuario__first_name'
+    ]
+    
+    # Remover filtros prohibidos
+    for filtro_prohibido in filtros_prohibidos:
+        if filtro_prohibido in filtros:
+            print(f"[CORRECCIÓN] Removiendo filtro prohibido: {filtro_prohibido}")
+            del filtros[filtro_prohibido]
+    
+    # AGREGAR FILTROS DE SEGURIDAD OBLIGATORIOS
+    if tipo_reporte == "pedidos":
+        filtros["usuario__id"] = datos_cliente.get('id')
+        print(f"[CORRECCIÓN] Agregado filtro seguridad: usuario__id = {datos_cliente.get('id')}")
+    elif tipo_reporte == "ventas":
+        filtros["pedido__usuario__id"] = datos_cliente.get('id')
+        print(f"[CORRECCIÓN] Agregado filtro seguridad: pedido__usuario__id = {datos_cliente.get('id')}")
+    
+    # Corregir nombres de campos si es necesario
+    correcciones_campos = {
+        'cliente_id': 'usuario__id',
+        'user_id': 'usuario__id',
+        'customer_id': 'usuario__id',
+    }
+    
+    for campo_incorrecto, campo_correcto in correcciones_campos.items():
+        if campo_incorrecto in filtros:
+            filtros[campo_correcto] = filtros.pop(campo_incorrecto)
+            print(f"[CORRECCIÓN] Campo corregido: {campo_incorrecto} -> {campo_correcto}")
+    
+    interpretacion["filtros"] = filtros
+    return interpretacion
+
 def _naive_interpret_cliente(user_prompt: str, datos_cliente: dict):
-    """Interpretación básica para clientes sin Gemini"""
+    """Interpretación básica para clientes sin Gemini - CORREGIDO"""
     p = (user_prompt or "").lower()
     
-    filtros_base_pedidos = {"usuario__id": datos_cliente.get('id', 'current_user')}
-    filtros_base_ventas = {"pedido__usuario__id": datos_cliente.get('id', 'current_user')}
+    # Filtros de seguridad base CORREGIDOS
+    filtros_base_pedidos = {"usuario__id": datos_cliente.get('id')}
+    filtros_base_ventas = {"pedido__usuario__id": datos_cliente.get('id')}
     
     tipo = "pedidos"
-    if any(palabra in p for palabra in ['producto', 'comprado', 'compro', 'frecuente']):
+    if any(palabra in p for palabra in ['producto', 'comprado', 'compro', 'frecuente', 'artículo']):
         tipo = "ventas"
-        agrupacion = ["producto__id", "producto__nombre"]
+        agrupacion = ["producto__nombre", "producto__marca__nombre"]
         calculos = {
             "veces_comprado": "Count('id')",
             "total_unidades": "Sum('cantidad')",
             "total_gastado": "Sum('subtotal')"
         }
         orden = ["-veces_comprado"]
+        limite = 10
     else:
         agrupacion = []
         calculos = {}
         orden = ["-fecha"]
+        limite = 20
     
+    # Filtros específicos
     filtros = filtros_base_pedidos if tipo == "pedidos" else filtros_base_ventas
+    
+    if "caro" in p or "costoso" in p or "mayor precio" in p:
+        orden = ["-total"]
+        limite = 5
+    
+    if "barato" in p or "económico" in p or "menor precio" in p:
+        orden = ["total"]
+        limite = 5
     
     if "último" in p or "reciente" in p:
         orden = ["-fecha"]
+        limite = 10
     
     if "pendiente" in p or "procesando" in p:
         if tipo == "pedidos":
-            filtros["estado__in"] = ["pendiente", "procesando"]
+            filtros["estado"] = "pendiente"
     
-    if "completado" in p or "entregado" in p or "pagado" in p:
+    if "pagado" in p or "completado" in p:
         if tipo == "pedidos":
-            filtros["estado"] = "completado"
+            filtros["estado"] = "pagado"
+    
+    if "cancelado" in p:
+        if tipo == "pedidos":
+            filtros["estado"] = "cancelado"
+    
+    if "año" in p or "año" in p:
+        current_year = timezone.now().year
+        if tipo == "pedidos":
+            filtros["fecha__year"] = current_year
+        elif tipo == "ventas":
+            filtros["pedido__fecha__year"] = current_year
+    
+    if "mes" in p:
+        current_month = timezone.now().month
+        if tipo == "pedidos":
+            filtros["fecha__month"] = current_month
+        elif tipo == "ventas":
+            filtros["pedido__fecha__month"] = current_month
     
     return _normalize_interpretacion({
         "tipo_reporte": tipo,
@@ -1335,9 +1490,11 @@ def _naive_interpret_cliente(user_prompt: str, datos_cliente: dict):
         "agrupacion": agrupacion,
         "calculos": calculos,
         "orden": orden,
-        "limite": 10,
+        "limite": limite,
         "error": None
     })
+
+
 
 def _generar_respuesta_amigable(pregunta, datos, datos_cliente, tipo_reporte):
     """Genera una respuesta amigable basada en los datos"""
@@ -1354,7 +1511,7 @@ def _generar_respuesta_amigable(pregunta, datos, datos_cliente, tipo_reporte):
                 except (ValueError, TypeError):
                     total = 0
 
-            return f"📦 Encontré tu pedido del {pedido.get('fecha', 'N/A')} por S/. {total:.2f}. Estado: {pedido.get('estado', 'N/A')}"
+            return f"📦 Encontré tu pedido del {pedido.get('fecha', 'N/A')} por Bs. {total:.2f}. Estado: {pedido.get('estado', 'N/A')}"
         else:
             pedido = datos[0]
             total = pedido.get('total', 0)
@@ -1364,7 +1521,7 @@ def _generar_respuesta_amigable(pregunta, datos, datos_cliente, tipo_reporte):
                 except (ValueError, TypeError):
                     total = 0
 
-            return f"📋 Encontré {len(datos)} pedidos relacionados con tu búsqueda. El más caro es del {pedido.get('fecha', 'N/A')} por S/. {total:.2f}"
+            return f"📋 Encontré {len(datos)} pedidos relacionados con tu búsqueda. El más caro es del {pedido.get('fecha', 'N/A')} por Bs. {total:.2f}"
 
     elif tipo_reporte == "ventas":
         producto_top = datos[0] if datos else {}
@@ -1390,7 +1547,7 @@ def _generar_respuesta_amigable(pregunta, datos, datos_cliente, tipo_reporte):
             except (ValueError, TypeError):
                 total_gastado = 0
 
-        return f"🏆 Tu producto más comprado es '{producto_top.get('producto_nombre', 'N/A')}' - lo has comprado {veces_comprado} veces ({total_unidades} unidades) por S/. {total_gastado:.2f}"
+        return f"🏆 Tu producto más comprado es '{producto_top.get('producto_nombre', 'N/A')}' - lo has comprado {veces_comprado} veces ({total_unidades} unidades) por Bs. {total_gastado:.2f}"
 
     else:
         return f"✅ Encontré {len(datos)} resultados relacionados con tu consulta sobre '{pregunta}'"
@@ -1587,14 +1744,18 @@ def opciones_filtros_cliente(request):
 
 @api_view(['POST'])
 def generar_reporte_cliente(request):
-    """Genera reporte con filtros personalizados"""
+    """Genera reporte con filtros personalizados - CORREGIDO"""
     cliente = request.user
     filtros = request.data.get('filtros', {})
     
+    print(f"[Reporte Cliente] Filtros recibidos: {filtros}")
+    print(f"[Reporte Cliente] Usuario: {cliente.id} - {cliente.username}")
+    
     try:
+        # Siempre filtrar por el usuario actual
         queryset = PedidoModel.objects.filter(usuario=cliente)
         
-        # Aplicar filtros
+        # Aplicar filtros de manera segura
         if filtros.get('fecha_desde'):
             queryset = queryset.filter(fecha__gte=filtros['fecha_desde'])
         if filtros.get('fecha_hasta'):
@@ -1604,13 +1765,17 @@ def generar_reporte_cliente(request):
         if filtros.get('tipo_pago'):
             queryset = queryset.filter(forma_pago__nombre=filtros['tipo_pago'])
         if filtros.get('monto_minimo'):
-            queryset = queryset.filter(total__gte=filtros['monto_minimo'])
+            queryset = queryset.filter(total__gte=float(filtros['monto_minimo']))
         if filtros.get('monto_maximo'):
-            queryset = queryset.filter(total__lte=filtros['monto_maximo'])
+            queryset = queryset.filter(total__lte=float(filtros['monto_maximo']))
         
+        # Ordenar por fecha descendente por defecto
         pedidos = queryset.order_by('-fecha')
         
+        # Serializar datos
         serializer = PedidoClienteSerializer(pedidos, many=True)
+        
+        print(f"[Reporte Cliente] Éxito: {pedidos.count()} pedidos encontrados")
         
         return Response({
             "respuesta": f"Reporte generado con {pedidos.count()} pedidos",
@@ -1621,7 +1786,140 @@ def generar_reporte_cliente(request):
         })
         
     except Exception as e:
+        print(f"[ERROR] Generar reporte: {e}")
+        import traceback
+        traceback.print_exc()
+        
         return Response(
-            {"error": "Error al generar reporte"}, 
+            {"error": f"Error al generar reporte: {str(e)}"}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+    
+# En tu views.py - Agrega este endpoint
+
+@api_view(['POST'])
+def generar_pdf_reporte(request):
+    """Genera un PDF del reporte basado en los filtros aplicados - CORREGIDO"""
+    cliente = request.user
+    filtros = request.data.get('filtros', {})
+    
+    print(f"[PDF Reporte] Filtros recibidos: {filtros}")
+    print(f"[PDF Reporte] Usuario: {cliente.id} - {cliente.username}")
+    
+    try:
+        # Siempre filtrar por el usuario actual
+        queryset = PedidoModel.objects.filter(usuario=cliente)
+        
+        # Aplicar filtros de manera segura
+        if filtros.get('fecha_desde'):
+            queryset = queryset.filter(fecha__gte=filtros['fecha_desde'])
+        if filtros.get('fecha_hasta'):
+            queryset = queryset.filter(fecha__lte=filtros['fecha_hasta'])
+        if filtros.get('estado'):
+            queryset = queryset.filter(estado=filtros['estado'])
+        if filtros.get('tipo_pago'):
+            queryset = queryset.filter(forma_pago__nombre=filtros['tipo_pago'])
+        if filtros.get('monto_minimo'):
+            queryset = queryset.filter(total__gte=float(filtros['monto_minimo']))
+        if filtros.get('monto_maximo'):
+            queryset = queryset.filter(total__lte=float(filtros['monto_maximo']))
+        
+        # Ordenar por fecha descendente por defecto
+        pedidos = queryset.order_by('-fecha')
+        
+        # Serializar datos
+        serializer = PedidoClienteSerializer(pedidos, many=True)
+        data = serializer.data
+        
+        # Crear interpretación para el generador de PDF
+        interpretacion = {
+            'prompt': f"Reporte de Pedidos - {cliente.get_full_name() or cliente.username}",
+            'tipo_reporte': 'pedidos_filtrados',
+            'filtros_aplicados': filtros,
+            'total_resultados': pedidos.count(),
+            'fecha_consulta': timezone.now().strftime('%Y-%m-%d %H:%M')
+        }
+        
+        # CORRECCIÓN: Usar la función correcta
+        from .generators import generar_reporte_cliente_pdf
+        response = generar_reporte_cliente_pdf(data, interpretacion)
+        
+        print(f"[PDF Reporte] Éxito: PDF generado con {pedidos.count()} pedidos")
+        
+        return response
+        
+    except Exception as e:
+        print(f"[ERROR] Generar PDF reporte: {e}")
+        import traceback
+        traceback.print_exc()
+        
+        return Response(
+            {"error": f"Error al generar PDF: {str(e)}"}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+    
+# En tu views.py - Asegúrate de que esté usando la función correcta
+
+@api_view(['POST'])
+def generar_pdf_consulta_ia(request):
+    """Genera un PDF de la consulta IA realizada - CORREGIDO"""
+    cliente = request.user
+    pregunta = request.data.get('pregunta', '').strip()
+    
+    if not pregunta:
+        return Response(
+            {"error": "Se requiere una pregunta para generar el PDF"}, 
+            status=status.HTTP_400_BAD_REQUEST
+        )
+    
+    try:
+        # Obtener datos del cliente
+        datos_cliente = _obtener_datos_cliente(cliente)
+        if not datos_cliente:
+            return Response(
+                {"error": "No se pudieron obtener los datos del cliente"}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        datos_cliente['id'] = cliente.id
+
+        # Interpretar consulta con IA
+        interpretacion = _call_gemini_cliente(pregunta, datos_cliente)
+        interpretacion["prompt"] = pregunta
+
+        print(f"🎯 Generando PDF para consulta: {pregunta}")
+
+        # Construir queryset
+        queryset, hubo_agrupacion = _build_queryset(interpretacion)
+
+        # Serializar datos
+        tipo_reporte = interpretacion.get("tipo_reporte")
+        data_para_reporte = _serializar_datos(queryset, tipo_reporte, hubo_agrupacion)
+
+        # Limpiar datos para el PDF
+        data_limpia = _limpiar_datos_para_json(data_para_reporte)
+
+        # Preparar interpretación para el PDF
+        interpretacion_pdf = {
+            'prompt': f"Consulta: {pregunta}",
+            'tipo_reporte': tipo_reporte,
+            'total_resultados': len(data_limpia),
+            'fecha_consulta': timezone.now().strftime('%Y-%m-%d %H:%M')
+        }
+
+        # CORRECCIÓN: Usar la función correcta
+        from .generators import generar_reporte_cliente_pdf
+        response = generar_reporte_cliente_pdf(data_limpia, interpretacion_pdf)
+        
+        print(f"📄 PDF generado exitosamente para: {pregunta}")
+        
+        return response
+
+    except Exception as e:
+        print(f"[ERROR] Generar PDF consulta IA: {e}")
+        import traceback
+        traceback.print_exc()
+        return Response(
+            {"error": f"Error al generar el PDF: {str(e)}"}, 
             status=status.HTTP_500_INTERNAL_SERVER_ERROR
         )
