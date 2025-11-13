@@ -1,6 +1,7 @@
 from datetime import datetime, timedelta
 from django.shortcuts import render
 from drf_yasg import openapi
+from comercio.utils import NotificacionService
 # from utils.encrypted_logger import registrar_accion
 from comercio.permissions import requiere_permiso 
 from rest_framework.decorators import api_view
@@ -596,6 +597,12 @@ def editar_producto(request, producto_id):
                     precio_cuota_anterior=precio_cuota_anterior,
                     precio_cuota_nuevo=precio_cuota_nuevo,
                 )
+                titulo = f"Actualización de precio en {producto.nombre}"
+                if precio_anterior < precio_nuevo:
+                    mensaje = f"El producto {producto.nombre} ha subido de precio. Nuevo precio: {precio_nuevo} Bs"
+                else:
+                    mensaje = f"¡Buenas noticias! El producto {producto.nombre} ha bajado de precio. Nuevo precio: {precio_nuevo} Bs"
+                NotificacionService.enviar_a_clientes(titulo, mensaje)
 
             return Response({
                 "status": 1,

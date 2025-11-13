@@ -822,3 +822,22 @@ def listar_formas_pago_activas_usuario(request):
         "values": {"formas_pago": serializer.data}
     })
 
+@api_view(['GET'])
+def listar_plan_pagos_pedido(request, pedido_id):
+    """Listar el plan de pagos de un pedido específico"""
+    planes_pago = PlanPagoModel.objects.filter(pedido_id=pedido_id).order_by('numero_cuota')
+    resultado = []
+    for plan in planes_pago:
+        resultado.append({
+            "numero_cuota": plan.numero_cuota,
+            "monto": float(plan.monto),
+            "fecha_vencimiento": plan.fecha_vencimiento,
+            "estado": plan.estado
+        })
+
+    return Response({
+        "status": 1,
+        "error": 0,
+        "message": "Plan de pagos obtenido correctamente",
+        "values": {"plan_pagos": resultado}
+    })

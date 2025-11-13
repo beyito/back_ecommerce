@@ -127,7 +127,7 @@ class NotificacionService:
         """Enviar notificación a todos los usuarios de un grupo/rol"""
         try:
             grupo = Grupo.objects.get(nombre=nombre_grupo)
-            usuarios = grupo.user_set.all()
+            usuarios = Usuario.objects.filter(grupo=grupo)
             
             total_notificaciones = 0
             for usuario in usuarios:
