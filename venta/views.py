@@ -7,12 +7,14 @@ from comercio.permissions import requiere_permiso
 from rest_framework.decorators import api_view
 from rest_framework.response import Response
 from drf_yasg.utils import swagger_auto_schema
+from rest_framework.views import APIView 
 # from .serializers import 
 from producto.models import ProductoModel
 from .models import CarritoModel, DetalleCarritoModel, FormaPagoModel, PedidoModel, DetallePedidoModel, PlanPagoModel
 from .serializers import CarritoSerializer, DetalleCarritoSerializer, FormaPagoSerializer, PedidoSerializer, DetallePedidoSerializer
 from django.core.paginator import Paginator, EmptyPage
 from django.db.models import Q
+from utils.encrypted_logger import registrar_accion 
 
 # Create your views here.
 
@@ -91,6 +93,7 @@ def agregar_producto_carrito(request):
     # Actualizar total del carrito
     carrito.total = Decimal(carrito.total) + Decimal(subtotal)
     carrito.save()
+    registrar_accion(usuario, "Añadido producto al carrito", request.META.get('REMOTE_ADDR'))
 
     return Response({
         "status": 1,
@@ -364,7 +367,7 @@ def generar_pedido(request):
                 })
 
             # 6️⃣ Determinar estado del pedido según forma de pago
-            if forma_pago.nombre.lower() in ["tarjeta de débito", "tarjeta de crédito"]:
+            if forma_pago.nombre.lower() in ["tarjeta de débito", "tarjeta de crédito","tarjeta"]:
                 estado_pedido = 'confirmado'  # Pagos con tarjeta se confirman inmediatamente
             elif forma_pago.nombre.lower() == "credito":
                 estado_pedido = 'pendiente'   # Crédito requiere aprobación
@@ -411,10 +414,10 @@ def generar_pedido(request):
                         fecha_vencimiento=fecha_vencimiento,
                         estado='pendiente'
                     )
-                
+                registrar_accion(usuario, "Pedido a crédito creado", request.META.get('REMOTE_ADDR'))
                 mensaje = f"Pedido a crédito creado exitosamente. {meses_credito} cuotas de {monto_mensual:.2f} Bs"
                 
-            elif forma_pago.nombre.lower() in ["tarjeta de débito", "tarjeta de crédito"]:
+            elif forma_pago.nombre.lower() in ["tarjeta de débito", "tarjeta de crédito","tarjeta"]:
                 # Para tarjetas, crear un solo pago inmediato
                 PlanPagoModel.objects.create(
                     pedido=pedido,
@@ -423,6 +426,7 @@ def generar_pedido(request):
                     fecha_vencimiento=fecha_actual + relativedelta(days=1),
                     estado='pagado'  # Asumimos pago inmediato con tarjeta
                 )
+                registrar_accion(usuario, "Pedido con tarjeta procesado", request.META.get('REMOTE_ADDR'))
                 mensaje = "Pedido con tarjeta procesado exitosamente"
                 
             else:
@@ -817,3 +821,4 @@ def listar_formas_pago_activas_usuario(request):
         "message": "Formas de pago obtenidas correctamente",
         "values": {"formas_pago": serializer.data}
     })
+

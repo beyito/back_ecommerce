@@ -34,6 +34,7 @@ from venta.models import CarritoModel, DetalleCarritoModel, PedidoModel, Detalle
 from .serializers import UsuarioReporteSerializer, CarritoReporteSerializer, PedidoReporteSerializer, DetallePedidoReporteSerializer, PagoReporteSerializer, PlanPagoReporteSerializer, ProductoReporteSerializer, CategoriaReporteSerializer, MarcaReporteSerializer,VentasAgrupadasSerializer, PedidoClienteSerializer, DetallePedidoClienteSerializer
 # from .permissions import IsAdminOrStaff
 from .generators import generar_reporte_pdf, generar_reporte_excel
+from utils.encrypted_logger import registrar_accion
 
 # --- Configuración Gemini ---
 try:
@@ -779,7 +780,7 @@ IMPORTANTE: Para consultas de marca específica, usar SIEMPRE __iexact no __icon
             if parsed.get("error") and interp["tipo_reporte"] in VALID_TIPOS:
                 print(f"[Gemini] Warning from LLM: {parsed.get('error')}. Using tolerant mode.")
                 interp["error"] = None
-
+            
             return interp
 
         except Exception as e:
@@ -815,6 +816,7 @@ IMPORTANTE: Para consultas de marca específica, usar SIEMPRE __iexact no __icon
             data_para_reporte = self._serializar_datos(queryset, tipo_reporte, hubo_agrupacion)
 
             json_output = json.dumps(data_para_reporte, default=_json_converter)
+            registrar_accion(request.user, f"Genero reporte de {tipo_reporte}", request.META.get('REMOTE_ADDR'))
             return HttpResponse(json_output, content_type='application/json', status=status.HTTP_200_OK)
 
         except Exception as e:
@@ -856,6 +858,7 @@ class ReporteDirectoView(ReporteBaseView):
             data_para_reporte = self._serializar_datos(queryset, tipo_reporte, hubo_agrupacion)
 
             json_output = json.dumps(data_para_reporte, default=_json_converter)
+            registrar_accion(request.user, f"Genero reporte de {tipo_reporte}", request.META.get('REMOTE_ADDR'))
             return HttpResponse(json_output, content_type='application/json', status=status.HTTP_200_OK)
 
         except Exception as e:
@@ -944,7 +947,6 @@ class ReporteDirectoView(ReporteBaseView):
                 filtros_out["nombre__icontains"] = filtros_in["busqueda"]
             elif tipo == "clientes":
                 filtros_out["username__icontains"] = filtros_in["busqueda"]
-
         interpretacion = {
             "tipo_reporte": tipo,
             "formato": "pantalla",

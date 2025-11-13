@@ -47,4 +47,9 @@ urlpatterns = [
     # RUTA PARA LAS NOTIFICACIONES PUSH EN MOVIL
     # --------------------------
     path("registrar-token/", views.registrar_token, name="registrar-token"),
+
+    # --------------------------
+    # BITACORA
+    # --------------------------
+    path('leer_bitacora',views.BitacoraView.as_view(),name='leer_bitacora'),
 ]

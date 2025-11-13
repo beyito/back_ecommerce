@@ -16,6 +16,7 @@ from . import serializers
 from .serializers import UserSerializer, MyTokenObtainPairSerializer, UserProfileSerializer, UserUpdateSerializer, ComponenteSerializer, PrivilegioSerializer, GrupoSerializer
 from rest_framework import serializers
 from comercio.permissions import PuedeActualizar, PuedeEliminar, PuedeLeer, PuedeCrear,requiere_permiso
+from utils.encrypted_logger import registrar_accion, leer_logs
 # --------------------------
 # Registro de usuario
 # --------------------------
@@ -138,6 +139,8 @@ class MyTokenObtainPairView(TokenObtainPairView):
             
             response_data = serializer.validated_data
             response_data['user'] = user_data
+
+            registrar_accion(user, "Inicio de sesión", request.META.get('REMOTE_ADDR'))
             
             return Response({
                 "status": 1,
@@ -230,6 +233,7 @@ class UserProfileView(APIView):
         
         if serializer.is_valid():
             serializer.save()
+            registrar_accion(user, "Actualizo su perfil", request.META.get('REMOTE_ADDR'))
             return Response({
                 "status": 1,
                 "error": 0,
@@ -453,6 +457,7 @@ def asignar_privilegio(request):
     )
 
     serializer = PrivilegioSerializer(privilegio)
+    registrar_accion(request.user, "ASIGNAR PRIVILEGIO", request.META.get('REMOTE_ADDR'))
     return Response({
         "status": 1,
         "error": 0,
@@ -889,3 +894,34 @@ def bulk_register(request):
             "message": f"Error general: {str(e)}",
             "values": {}
         }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+    
+class BitacoraView(APIView):
+    # permission_classes = [IsAuthenticated]  # Solo usuarios autenticados
+
+    def post(self, request):
+        """
+        Listar bitácora (requiere llave del desarrollador)
+        """
+        llave = request.data.get("llave", None)
+
+        if not llave:
+            return Response({
+                "status": 2,
+                "error": 1,
+                "message": "Debe proporcionar la llave del desarrollador"
+            })
+
+        try:
+            registros = leer_logs(llave)
+            return Response({
+                "status": 1,
+                "error": 0,
+                "message": "Bitácora desencriptada correctamente",
+                "values": registros
+            })
+        except Exception as e:
+            return Response({
+                "status": 2,
+                "error": 1,
+                "message": "Llave inválida o error al desencriptar"
+            })
