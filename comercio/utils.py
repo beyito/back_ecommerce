@@ -126,7 +126,7 @@ class NotificacionService:
     def enviar_a_grupo(nombre_grupo, titulo, mensaje, data_extra=None):
         """Enviar notificación a todos los usuarios de un grupo/rol"""
         try:
-            grupo = Grupo.objects.get(name=nombre_grupo)
+            grupo = Grupo.objects.get(nombre=nombre_grupo)
             usuarios = grupo.user_set.all()
             
             total_notificaciones = 0

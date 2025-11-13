@@ -1,10 +1,17 @@
+from rest_framework import viewsets
 # reportes/views.py
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status, permissions
 from django.http import HttpResponse
 from django.conf import settings
-
+from rest_framework.decorators import api_view
+# endpoints_reportes_cliente.py
+from rest_framework.decorators import action
+from pydantic import BaseModel
+from typing import List, Dict, Optional
+import pandas as pd
+from django.contrib.auth import get_user_model
 import json
 import os
 import traceback
@@ -22,8 +29,9 @@ from django.utils import timezone
 # --- Models de tu ecommerce ---
 from usuario.models import Usuario, Grupo
 from producto.models import ProductoModel, CategoriaModel, SubcategoriaModel, MarcaModel, CambioPrecioModel
+from producto.serializers import ProductoSerializer
 from venta.models import CarritoModel, DetalleCarritoModel, PedidoModel, DetallePedidoModel, FormaPagoModel, PlanPagoModel, PagoModel, MetodoPagoModel
-from .serializers import UsuarioReporteSerializer, CarritoReporteSerializer, PedidoReporteSerializer, DetallePedidoReporteSerializer, PagoReporteSerializer, PlanPagoReporteSerializer, ProductoReporteSerializer, CategoriaReporteSerializer, MarcaReporteSerializer,VentasAgrupadasSerializer
+from .serializers import UsuarioReporteSerializer, CarritoReporteSerializer, PedidoReporteSerializer, DetallePedidoReporteSerializer, PagoReporteSerializer, PlanPagoReporteSerializer, ProductoReporteSerializer, CategoriaReporteSerializer, MarcaReporteSerializer,VentasAgrupadasSerializer, PedidoClienteSerializer, DetallePedidoClienteSerializer
 # from .permissions import IsAdminOrStaff
 from .generators import generar_reporte_pdf, generar_reporte_excel
 
@@ -495,7 +503,7 @@ class ReporteBaseView(APIView):
         if hubo_agrupacion:
             # Para datos agrupados, usar values() directamente
             datos = list(queryset)
-            
+
             # Mejorar datos agrupados con nombres legibles
             for item in datos:
                 if 'producto__id' in item and 'producto__nombre' in item:
@@ -503,17 +511,39 @@ class ReporteBaseView(APIView):
                     item['producto_nombre'] = item.pop('producto__nombre')
                 if 'pedido__usuario__username' in item:
                     item['cliente'] = item.pop('pedido__usuario__username')
-                # Agregar más transformaciones según necesites
-                
+
+                # CONVERTIR campos numéricos a tipos correctos
+                for key, value in item.items():
+                    if isinstance(value, Decimal):
+                        item[key] = float(value)
+                    elif key.endswith('_id') and value is not None:
+                        try:
+                            item[key] = int(value)
+                        except (ValueError, TypeError):
+                            pass
+                        
             return datos
-        
+
         # Para datos no agrupados, usar serializers
         serializer_class = self._get_serializer_class(tipo_reporte)
-        
+
         if serializer_class:
             # Usar serializer para datos estructurados y seguros
             serializer = serializer_class(queryset, many=True)
-            return serializer.data
+            data = serializer.data
+
+            # Asegurar que los campos numéricos sean del tipo correcto
+            for item in data:
+                for key, value in item.items():
+                    if isinstance(value, Decimal):
+                        item[key] = float(value)
+                    elif key in ['total', 'precio_contado', 'precio_cuota', 'monto', 'subtotal', 'precio_unitario'] and value is not None:
+                        try:
+                            item[key] = float(value)
+                        except (ValueError, TypeError):
+                            pass
+                        
+            return data
         else:
             # Fallback para tipos sin serializer específico
             campos_seguros = {
@@ -528,12 +558,38 @@ class ReporteBaseView(APIView):
                 "planes_pago": ['id', 'usuario__username', 'monto', 'fecha_vencimiento', 'is_active'],
                 "inventario": ['id', 'producto__nombre', 'stock', 'is_active'],
             }
-            
+
             campos = campos_seguros.get(tipo_reporte, [])
             if campos:
-                return list(queryset.values(*campos))
+                datos = list(queryset.values(*campos))
+
+                # CONVERTIR campos numéricos
+                for item in datos:
+                    for key, value in item.items():
+                        if isinstance(value, Decimal):
+                            item[key] = float(value)
+                        elif key in ['total', 'precio_contado', 'precio_cuota', 'monto', 'subtotal', 'precio_unitario', 'stock'] and value is not None:
+                            try:
+                                item[key] = float(value)
+                            except (ValueError, TypeError):
+                                pass
+                            
+                return datos
             else:
-                return list(queryset.values())
+                datos = list(queryset.values())
+
+                # CONVERTIR campos numéricos
+                for item in datos:
+                    for key, value in item.items():
+                        if isinstance(value, Decimal):
+                            item[key] = float(value)
+                        elif key in ['total', 'precio_contado', 'precio_cuota', 'monto', 'subtotal', 'precio_unitario', 'stock'] and value is not None:
+                            try:
+                                item[key] = float(value)
+                            except (ValueError, TypeError):
+                                pass
+                            
+                return datos
 
 # ===================================================================
 # VISTA #1: GenerarReporteView (CON IA)
@@ -932,3 +988,638 @@ class ExportarDatosView(ReporteBaseView):
             traceback.print_exc()
             return Response({"error": "Error interno al generar el archivo."},
                             status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+        
+
+
+def _normalize_interpretacion(parsed, default_tipo="pedidos"):
+    """Normaliza la interpretación de Gemini"""
+    return {
+        "tipo_reporte": parsed.get("tipo_reporte", default_tipo),
+        "formato": parsed.get("formato", "pantalla"),
+        "filtros": parsed.get("filtros", {}),
+        "agrupacion": parsed.get("agrupacion", []),
+        "calculos": parsed.get("calculos", {}),
+        "orden": parsed.get("orden", []),
+        "limite": parsed.get("limite", 20),
+        "error": parsed.get("error")
+    }
+
+def _limpiar_datos_para_json(datos):
+    """Convierte Decimal a float y maneja otros tipos no serializables"""
+    if isinstance(datos, dict):
+        return {k: _limpiar_datos_para_json(v) for k, v in datos.items()}
+    elif isinstance(datos, list):
+        return [_limpiar_datos_para_json(item) for item in datos]
+    elif isinstance(datos, Decimal):
+        return float(datos)
+    elif isinstance(datos, (datetime, date)):
+        return datos.isoformat()
+    elif hasattr(datos, 'isoformat'):
+        return datos.isoformat()
+    else:
+        return datos
+
+def _convertir_tipos_numericos(datos):
+    """Convierte campos numéricos a los tipos correctos"""
+    if isinstance(datos, dict):
+        for key, value in datos.items():
+            if isinstance(value, (Decimal, str)):
+                if key in ['total', 'precio_contado', 'precio_cuota', 'monto', 'subtotal', 'precio_unitario', 'stock', 'cantidad']:
+                    try:
+                        if isinstance(value, Decimal):
+                            datos[key] = float(value)
+                        elif isinstance(value, str):
+                            datos[key] = float(value)
+                    except (ValueError, TypeError):
+                        pass
+                elif key.endswith('_id') and value is not None:
+                    try:
+                        datos[key] = int(value)
+                    except (ValueError, TypeError):
+                        pass
+    elif isinstance(datos, list):
+        for item in datos:
+            _convertir_tipos_numericos(item)
+    return datos
+
+def _obtener_datos_cliente(cliente):
+    """Obtiene datos estructurados del cliente para IA"""
+    try:
+        pedidos_cliente = PedidoModel.objects.filter(usuario=cliente)
+        total_pedidos = pedidos_cliente.count()
+        total_gastado = pedidos_cliente.aggregate(total=Sum('total'))['total'] or 0
+
+        productos_frecuentes = DetallePedidoModel.objects.filter(
+            pedido__usuario=cliente
+        ).values(
+            'producto__nombre', 
+            'producto__marca__nombre'
+        ).annotate(
+            veces_comprado=Count('id'),
+            total_unidades=Sum('cantidad'),
+            total_gastado=Sum('subtotal')
+        ).order_by('-veces_comprado')[:3]
+
+        productos_frecuentes_limpios = []
+        for producto in productos_frecuentes:
+            producto_limpio = {}
+            for key, value in producto.items():
+                if isinstance(value, Decimal):
+                    producto_limpio[key] = float(value)
+                else:
+                    producto_limpio[key] = value
+            productos_frecuentes_limpios.append(producto_limpio)
+
+        ultimo_pedido = pedidos_cliente.order_by('-fecha').first()
+        ultimo_pedido_data = {}
+        if ultimo_pedido:
+            ultimo_pedido_data = {
+                "fecha": ultimo_pedido.fecha.strftime('%Y-%m-%d'),
+                "total": float(ultimo_pedido.total),
+                "estado": ultimo_pedido.estado
+            }
+
+        pedidos_por_estado = list(pedidos_cliente.values('estado').annotate(
+            total=Count('id')
+        ))
+
+        seis_meses_atras = timezone.now() - timedelta(days=180)
+        tendencia_mensual = list(pedidos_cliente.filter(
+            fecha__gte=seis_meses_atras
+        ).extra(
+            {'mes': "DATE_TRUNC('month', fecha)"}
+        ).values('mes').annotate(
+            total_mes=Sum('total'),
+            pedidos_mes=Count('id')
+        ).order_by('mes'))
+
+        for item in tendencia_mensual:
+            if 'total_mes' in item and isinstance(item['total_mes'], Decimal):
+                item['total_mes'] = float(item['total_mes'])
+
+        return {
+            "nombre_cliente": cliente.get_full_name() or cliente.username,
+            "total_pedidos": total_pedidos,
+            "total_gastado": float(total_gastado),
+            "promedio_por_pedido": float(total_gastado / total_pedidos) if total_pedidos > 0 else 0,
+            "productos_frecuentes": productos_frecuentes_limpios,
+            "ultimo_pedido": ultimo_pedido_data,
+            "pedidos_por_estado": pedidos_por_estado,
+            "tendencia_mensual": tendencia_mensual,
+            "miembro_desde": cliente.date_joined.strftime('%Y-%m-%d'),
+            "meses_como_cliente": (timezone.now().date() - cliente.date_joined.date()).days // 30
+        }
+
+    except Exception as e:
+        print(f"[ERROR] Obteniendo datos cliente: {e}")
+        return {}
+
+def _build_queryset(interpretacion):
+    """Construye el queryset basado en la interpretación"""
+    from django.db.models import Count, Sum
+    
+    tipo_reporte = interpretacion.get("tipo_reporte")
+    filtros = interpretacion.get("filtros", {})
+    agrupacion = interpretacion.get("agrupacion", [])
+    calculos = interpretacion.get("calculos", {})
+    orden = interpretacion.get("orden", [])
+    limite = interpretacion.get("limite", 20)
+    
+    hubo_agrupacion = bool(agrupacion)
+    
+    try:
+        if tipo_reporte == "pedidos":
+            queryset = PedidoModel.objects.filter(**filtros)
+            
+            if agrupacion:
+                queryset = queryset.values(*agrupacion)
+                annotations = {}
+                for key, value in calculos.items():
+                    if 'Count' in value:
+                        annotations[key] = Count('id')
+                    elif 'Sum' in value:
+                        field = value.split("'")[1] if "'" in value else 'total'
+                        annotations[key] = Sum(field)
+                if annotations:
+                    queryset = queryset.annotate(**annotations)
+            
+            if orden:
+                queryset = queryset.order_by(*orden)
+            
+            if limite:
+                queryset = queryset[:limite]
+                
+        elif tipo_reporte == "ventas":
+            queryset = DetallePedidoModel.objects.filter(**filtros)
+            
+            if agrupacion:
+                queryset = queryset.values(*agrupacion)
+                annotations = {}
+                for key, value in calculos.items():
+                    if 'Count' in value:
+                        annotations[key] = Count('id')
+                    elif 'Sum' in value:
+                        field = value.split("'")[1] if "'" in value else 'subtotal'
+                        annotations[key] = Sum(field)
+                if annotations:
+                    queryset = queryset.annotate(**annotations)
+            
+            if orden:
+                queryset = queryset.order_by(*orden)
+            
+            if limite:
+                queryset = queryset[:limite]
+                
+        else:
+            queryset = PedidoModel.objects.none()
+            
+        return queryset, hubo_agrupacion
+        
+    except Exception as e:
+        print(f"[ERROR] Build queryset: {e}")
+        return PedidoModel.objects.none(), False
+
+def _serializar_datos(queryset, tipo_reporte, hubo_agrupacion):
+    """Serializa los datos según el tipo de reporte"""
+    if hubo_agrupacion:
+        return list(queryset)
+    
+    if tipo_reporte == "pedidos":
+        serializer = PedidoClienteSerializer(queryset, many=True)
+        return serializer.data
+    elif tipo_reporte == "ventas":
+        return list(queryset.values())
+    
+    return []
+
+def _call_gemini_cliente(user_prompt: str, datos_cliente: dict):
+    """Gemini especializado para consultas del cliente"""
+    if not GEMINI_CONFIGURED:
+        return _naive_interpret_cliente(user_prompt, datos_cliente)
+
+    now = timezone.now()
+    current_date_str = now.strftime('%Y-%m-%d')
+
+    datos_cliente_limpios = _limpiar_datos_para_json(datos_cliente)
+
+    schema_cliente = f"""
+ESQUEMA CLIENTE - MIS PEDIDOS Y COMPRAS
+Fecha actual: {current_date_str}
+
+DATOS DEL CLIENTE ACTUAL:
+- Nombre: {datos_cliente_limpios.get('nombre_cliente', 'Cliente')}
+- Total de pedidos: {datos_cliente_limpios.get('total_pedidos', 0)}
+- Total gastado: S/. {datos_cliente_limpios.get('total_gastado', 0):.2f}
+- Promedio por pedido: S/. {datos_cliente_limpios.get('promedio_por_pedido', 0):.2f}
+- Miembro desde: {datos_cliente_limpios.get('miembro_desde', 'N/A')}
+- Meses como cliente: {datos_cliente_limpios.get('meses_como_cliente', 0)}
+
+PRODUCTOS MÁS COMPRADOS:
+{json.dumps(datos_cliente_limpios.get('productos_frecuentes', []), indent=4, ensure_ascii=False)}
+
+ÚLTIMO PEDIDO:
+{json.dumps(datos_cliente_limpios.get('ultimo_pedido', {}), indent=4, ensure_ascii=False)}
+
+PEDIDOS POR ESTADO:
+{json.dumps(datos_cliente_limpios.get('pedidos_por_estado', []), indent=4, ensure_ascii=False)}
+
+TENDENCIA MENSUAL (Últimos 6 meses):
+{json.dumps(datos_cliente_limpios.get('tendencia_mensual', []), indent=4, ensure_ascii=False)}
+"""
+
+    system_instruction = f"""
+Eres un asistente virtual especializado en reportes de compras para CLIENTES. 
+Fecha actual: {current_date_str}
+
+ANALIZA la consulta del cliente y DEVUELVE JSON con esta estructura:
+
+{{
+  "tipo_reporte": "string",
+  "formato": "pantalla", 
+  "filtros": {{ "campo__lookup": "valor" }},
+  "agrupacion": ["campo"],
+  "calculos": {{ "nombre": "Funcion('campo')" }},
+  "orden": ["campo"],
+  "limite": número,
+  "error": null
+}}
+
+REGLAS CRÍTICAS PARA CLIENTES:
+1. SEGURIDAD: Todos los reportes deben filtrar por el usuario actual
+2. TIPOS DE REPORTE PERMITIDOS: "pedidos", "ventas"
+3. Usar siempre filtros de seguridad
+"""
+
+    try:
+        model = genai.GenerativeModel(GEMINI_MODEL_NAME)
+        generation_config = genai.types.GenerationConfig(
+            response_mime_type="application/json",
+            temperature=0.1
+        )
+
+        response = model.generate_content(
+            [system_instruction, schema_cliente, user_prompt],
+            generation_config=generation_config
+        )
+
+        raw_response_text = (response.text or "").strip()
+        print(f"[Gemini Cliente] Raw JSON response:\n{raw_response_text}")
+
+        cleaned = raw_response_text.removeprefix("```json").removesuffix("```").strip()
+        if not (cleaned.startswith('{') and cleaned.endswith('}')):
+            i, j = cleaned.find('{'), cleaned.rfind('}')
+            if i != -1 and j != -1 and j > i:
+                cleaned = cleaned[i:j+1]
+            else:
+                raise json.JSONDecodeError("No JSON object found", cleaned, 0)
+
+        parsed = json.loads(cleaned)
+        interp = _normalize_interpretacion(parsed, default_tipo="pedidos")
+
+        # AGREGAR FILTROS DE SEGURIDAD AUTOMÁTICAMENTE
+        if interp["tipo_reporte"] == "pedidos":
+            interp["filtros"]["usuario__id"] = datos_cliente.get('id', 'current_user')
+        elif interp["tipo_reporte"] == "ventas":
+            interp["filtros"]["pedido__usuario__id"] = datos_cliente.get('id', 'current_user')
+
+        if 'limite' not in parsed or not isinstance(parsed['limite'], int):
+            interp['limite'] = 20
+
+        return interp
+
+    except Exception as e:
+        print(f"[ERROR] Gemini cliente failed -> falling back to naive. Reason: {e}")
+        return _naive_interpret_cliente(user_prompt, datos_cliente)
+
+def _naive_interpret_cliente(user_prompt: str, datos_cliente: dict):
+    """Interpretación básica para clientes sin Gemini"""
+    p = (user_prompt or "").lower()
+    
+    filtros_base_pedidos = {"usuario__id": datos_cliente.get('id', 'current_user')}
+    filtros_base_ventas = {"pedido__usuario__id": datos_cliente.get('id', 'current_user')}
+    
+    tipo = "pedidos"
+    if any(palabra in p for palabra in ['producto', 'comprado', 'compro', 'frecuente']):
+        tipo = "ventas"
+        agrupacion = ["producto__id", "producto__nombre"]
+        calculos = {
+            "veces_comprado": "Count('id')",
+            "total_unidades": "Sum('cantidad')",
+            "total_gastado": "Sum('subtotal')"
+        }
+        orden = ["-veces_comprado"]
+    else:
+        agrupacion = []
+        calculos = {}
+        orden = ["-fecha"]
+    
+    filtros = filtros_base_pedidos if tipo == "pedidos" else filtros_base_ventas
+    
+    if "último" in p or "reciente" in p:
+        orden = ["-fecha"]
+    
+    if "pendiente" in p or "procesando" in p:
+        if tipo == "pedidos":
+            filtros["estado__in"] = ["pendiente", "procesando"]
+    
+    if "completado" in p or "entregado" in p or "pagado" in p:
+        if tipo == "pedidos":
+            filtros["estado"] = "completado"
+    
+    return _normalize_interpretacion({
+        "tipo_reporte": tipo,
+        "formato": "pantalla",
+        "filtros": filtros,
+        "agrupacion": agrupacion,
+        "calculos": calculos,
+        "orden": orden,
+        "limite": 10,
+        "error": None
+    })
+
+def _generar_respuesta_amigable(pregunta, datos, datos_cliente, tipo_reporte):
+    """Genera una respuesta amigable basada en los datos"""
+    if not datos:
+        return f"📭 No encontré información específica para tu consulta sobre '{pregunta}'. ¿Podrías intentar con otra pregunta?"
+
+    if tipo_reporte == "pedidos":
+        if len(datos) == 1:
+            pedido = datos[0]
+            total = pedido.get('total', 0)
+            if isinstance(total, str):
+                try:
+                    total = float(total)
+                except (ValueError, TypeError):
+                    total = 0
+
+            return f"📦 Encontré tu pedido del {pedido.get('fecha', 'N/A')} por S/. {total:.2f}. Estado: {pedido.get('estado', 'N/A')}"
+        else:
+            pedido = datos[0]
+            total = pedido.get('total', 0)
+            if isinstance(total, str):
+                try:
+                    total = float(total)
+                except (ValueError, TypeError):
+                    total = 0
+
+            return f"📋 Encontré {len(datos)} pedidos relacionados con tu búsqueda. El más caro es del {pedido.get('fecha', 'N/A')} por S/. {total:.2f}"
+
+    elif tipo_reporte == "ventas":
+        producto_top = datos[0] if datos else {}
+
+        veces_comprado = producto_top.get('veces_comprado', 0)
+        if isinstance(veces_comprado, str):
+            try:
+                veces_comprado = int(veces_comprado)
+            except (ValueError, TypeError):
+                veces_comprado = 0
+
+        total_unidades = producto_top.get('total_unidades', 0)
+        if isinstance(total_unidades, str):
+            try:
+                total_unidades = int(total_unidades)
+            except (ValueError, TypeError):
+                total_unidades = 0
+
+        total_gastado = producto_top.get('total_gastado', 0)
+        if isinstance(total_gastado, str):
+            try:
+                total_gastado = float(total_gastado)
+            except (ValueError, TypeError):
+                total_gastado = 0
+
+        return f"🏆 Tu producto más comprado es '{producto_top.get('producto_nombre', 'N/A')}' - lo has comprado {veces_comprado} veces ({total_unidades} unidades) por S/. {total_gastado:.2f}"
+
+    else:
+        return f"✅ Encontré {len(datos)} resultados relacionados con tu consulta sobre '{pregunta}'"
+
+# ===================================================================
+# ENDPOINTS CON @api_view
+# ===================================================================
+
+@api_view(['POST'])
+def consulta_ia_cliente(request):
+    """Consulta con IA sobre los pedidos del cliente"""
+    cliente = request.user
+    pregunta = request.data.get('pregunta', '').strip()
+    
+    if not pregunta:
+        return Response(
+            {"error": "Se requiere una pregunta"}, 
+            status=status.HTTP_400_BAD_REQUEST
+        )
+
+    try:
+        datos_cliente = _obtener_datos_cliente(cliente)
+        if not datos_cliente:
+            return Response(
+                {"error": "No se pudieron obtener los datos del cliente"}, 
+                status=status.HTTP_500_INTERNAL_SERVER_ERROR
+            )
+
+        datos_cliente['id'] = cliente.id
+
+        interpretacion = _call_gemini_cliente(pregunta, datos_cliente)
+        interpretacion["prompt"] = pregunta
+        interpretacion["error"] = None
+
+        print(f"🎯 Consulta cliente: {pregunta}")
+        print(f"🔐 Interpretación con seguridad: {interpretacion}")
+
+        queryset, hubo_agrupacion = _build_queryset(interpretacion)
+
+        tipo_reporte = interpretacion.get("tipo_reporte")
+        data_para_reporte = _serializar_datos(queryset, tipo_reporte, hubo_agrupacion)
+
+        data_convertida = _convertir_tipos_numericos(data_para_reporte)
+        data_limpia = _limpiar_datos_para_json(data_convertida)
+        datos_cliente_limpios = _limpiar_datos_para_json(datos_cliente)
+
+        respuesta_amigable = _generar_respuesta_amigable(
+            pregunta, data_limpia, datos_cliente_limpios, tipo_reporte
+        )
+
+        return Response({
+            "respuesta": respuesta_amigable,
+            "datos": data_limpia,
+            "tipo_consulta": interpretacion["tipo_reporte"],
+            "total_resultados": len(data_limpia),
+            "datos_cliente": {
+                "total_pedidos": datos_cliente_limpios.get("total_pedidos", 0),
+                "total_gastado": datos_cliente_limpios.get("total_gastado", 0),
+                "producto_mas_comprado": datos_cliente_limpios.get("productos_frecuentes", [{}])[0] if datos_cliente_limpios.get("productos_frecuentes") else {}
+            }
+        })
+
+    except Exception as e:
+        print(f"[ERROR] Consulta IA cliente: {e}")
+        traceback.print_exc()
+        return Response({
+            "respuesta": "Lo siento, hubo un error al procesar tu consulta. Por favor intenta con preguntas más específicas sobre tus pedidos.",
+            "sugerencias": [
+                "¿Cuál fue mi último pedido?",
+                "¿Cuánto he gastado en total?",
+                "¿Cuáles son mis productos más comprados?",
+                "¿Tengo pedidos pendientes?"
+            ]
+        }, status=status.HTTP_500_INTERNAL_SERVER_ERROR)
+
+@api_view(['GET'])
+def estadisticas_cliente(request):
+    """Obtiene estadísticas generales del cliente"""
+    cliente = request.user
+    
+    try:
+        datos_cliente = _obtener_datos_cliente(cliente)
+        
+        return Response({
+            "estadisticas": {
+                "total_pedidos": datos_cliente.get("total_pedidos", 0),
+                "total_gastado": datos_cliente.get("total_gastado", 0),
+                "promedio_por_pedido": datos_cliente.get("promedio_por_pedido", 0),
+                "miembro_desde": datos_cliente.get("miembro_desde", "N/A"),
+                "meses_como_cliente": datos_cliente.get("meses_como_cliente", 0)
+            },
+            "productos_frecuentes": datos_cliente.get("productos_frecuentes", []),
+            "ultimo_pedido": datos_cliente.get("ultimo_pedido", {}),
+            "pedidos_por_estado": datos_cliente.get("pedidos_por_estado", []),
+            "fecha_consulta": timezone.now().strftime('%Y-%m-%d %H:%M')
+        })
+        
+    except Exception as e:
+        print(f"[ERROR] Estadísticas cliente: {e}")
+        return Response(
+            {"error": "Error al obtener estadísticas"}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['POST'])
+def procesar_voz_cliente(request):
+    """Procesa audio de voz del cliente"""
+    cliente = request.user
+    
+    try:
+        # Simular transcripción (en producción integrar con servicio real)
+        consultas_comunes = [
+            "mis últimos pedidos",
+            "qué productos compro más seguido", 
+            "cuánto he gastado este mes",
+            "mis pedidos pendientes",
+            "cuál fue mi último pedido"
+        ]
+        texto_simulado = random.choice(consultas_comunes)
+        
+        datos_cliente = _obtener_datos_cliente(cliente)
+        datos_cliente['id'] = cliente.id
+        
+        interpretacion = _call_gemini_cliente(texto_simulado, datos_cliente)
+        queryset, hubo_agrupacion = _build_queryset(interpretacion)
+        
+        tipo_reporte = interpretacion.get("tipo_reporte")
+        datos = _serializar_datos(queryset, tipo_reporte, hubo_agrupacion)
+        
+        respuesta = _generar_respuesta_amigable(texto_simulado, datos, datos_cliente, tipo_reporte)
+        
+        return Response({
+            "texto_transcrito": texto_simulado,
+            "respuesta": respuesta,
+            "datos": datos,
+            "accion_sugerida": _sugerir_accion(texto_simulado)
+        })
+        
+    except Exception as e:
+        print(f"[ERROR] Procesar voz cliente: {e}")
+        return Response(
+            {"error": "Error al procesar el audio. Intenta nuevamente."}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+def _sugerir_accion(texto):
+    """Sugiere una acción basada en la consulta"""
+    texto = texto.lower()
+    
+    if any(palabra in texto for palabra in ['pedido', 'orden']):
+        return "ver_historial_pedidos"
+    elif any(palabra in texto for palabra in ['producto', 'artículo']):
+        return "ver_productos_frecuentes"
+    elif any(palabra in texto for palabra in ['gasto', 'dinero']):
+        return "ver_estadisticas"
+    else:
+        return "explorar_reportes"
+
+@api_view(['GET'])
+def opciones_filtros_cliente(request):
+    """Obtiene opciones para los filtros"""
+    cliente = request.user
+    
+    try:
+        estados = PedidoModel.objects.filter(
+            usuario=cliente
+        ).values_list('estado', flat=True).distinct()
+        
+        tipos_pago = PedidoModel.objects.filter(
+            usuario=cliente
+        ).values_list('forma_pago__nombre', flat=True).distinct()
+        
+        fechas = PedidoModel.objects.filter(
+            usuario=cliente
+        ).aggregate(
+            min_fecha=Min('fecha'),
+            max_fecha=Max('fecha')
+        )
+        
+        return Response({
+            'estados': list(estados),
+            'tipos_pago': list(tipos_pago),
+            'rango_fechas': {
+                'min': fechas['min_fecha'],
+                'max': fechas['max_fecha']
+            }
+        })
+        
+    except Exception as e:
+        return Response(
+            {"error": "Error al obtener opciones de filtros"}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+@api_view(['POST'])
+def generar_reporte_cliente(request):
+    """Genera reporte con filtros personalizados"""
+    cliente = request.user
+    filtros = request.data.get('filtros', {})
+    
+    try:
+        queryset = PedidoModel.objects.filter(usuario=cliente)
+        
+        # Aplicar filtros
+        if filtros.get('fecha_desde'):
+            queryset = queryset.filter(fecha__gte=filtros['fecha_desde'])
+        if filtros.get('fecha_hasta'):
+            queryset = queryset.filter(fecha__lte=filtros['fecha_hasta'])
+        if filtros.get('estado'):
+            queryset = queryset.filter(estado=filtros['estado'])
+        if filtros.get('tipo_pago'):
+            queryset = queryset.filter(forma_pago__nombre=filtros['tipo_pago'])
+        if filtros.get('monto_minimo'):
+            queryset = queryset.filter(total__gte=filtros['monto_minimo'])
+        if filtros.get('monto_maximo'):
+            queryset = queryset.filter(total__lte=filtros['monto_maximo'])
+        
+        pedidos = queryset.order_by('-fecha')
+        
+        serializer = PedidoClienteSerializer(pedidos, many=True)
+        
+        return Response({
+            "respuesta": f"Reporte generado con {pedidos.count()} pedidos",
+            "datos": serializer.data,
+            "tipo_consulta": "pedidos_filtrados",
+            "total_resultados": pedidos.count(),
+            "filtros_aplicados": filtros
+        })
+        
+    except Exception as e:
+        return Response(
+            {"error": "Error al generar reporte"}, 
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
