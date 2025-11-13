@@ -673,7 +673,7 @@ def crear_forma_pago(request):
             "status": 1,
             "error": 0,
             "message": "Forma Pago creada correctamente",
-            "values": {"Forma Pago": serializer.data}
+            "values": {"Forma_Pago": serializer.data}
         })
     return Response({
         "status": 0,
@@ -707,7 +707,7 @@ def editar_forma_pago(request, forma_pago_id):
             "status": 1,
             "error": 0,
             "message": "Forma Pago editada correctamente",
-            "values": {"Forma Pago": serializer.data}
+            "values": {"Forma_Pago": serializer.data}
         })
     return Response({
         "status": 0,
@@ -772,7 +772,7 @@ def listar_formas_pago_activos(request):
         "status": 1,
         "error": 0,
         "message": "Formas Pago obtenidas correctamente",
-        "values": {"Formas Pago": serializer.data}
+        "values": {"Formas_Pago": serializer.data}
     })
 
 # --------------------- Listar Todas las Formas Pago ---------------------
@@ -785,7 +785,7 @@ def listar_formas_pago(request):
         "status": 1,
         "error": 0,
         "message": "Formas Pago obtenidas correctamente",
-        "values": {"Formas Pago": serializer.data}
+        "values": {"Formas_Pago": serializer.data}
     })
 
 # ---------------------- Listar Formas Pago por ID ----------------------
